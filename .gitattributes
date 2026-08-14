@@ -1,1 +1,29 @@
+# Git LFS — large/binary files are stored outside the git history.
+# Install git-lfs (or point the local filter at a standalone binary) before
+# cloning/fetching; see README "Release artifacts & Git LFS".
+
+# Archives & packaged payloads
+*.7z filter=lfs diff=lfs merge=lfs -text
+*.xz filter=lfs diff=lfs merge=lfs -text
+*.zip filter=lfs diff=lfs merge=lfs -text
+*.tar filter=lfs diff=lfs merge=lfs -text
+*.gz filter=lfs diff=lfs merge=lfs -text
+*.asar filter=lfs diff=lfs merge=lfs -text
+# Images (icons, screenshots, documentation assets)
+*.png filter=lfs diff=lfs merge=lfs -text
+*.jpg filter=lfs diff=lfs merge=lfs -text
+*.jpeg filter=lfs diff=lfs merge=lfs -text
+*.gif filter=lfs diff=lfs merge=lfs -text
+*.webp filter=lfs diff=lfs merge=lfs -text
+*.ico filter=lfs diff=lfs merge=lfs -text
+*.icns filter=lfs diff=lfs merge=lfs -text
+*.bmp filter=lfs diff=lfs merge=lfs -text
+# dist-marker (archived release marker builds): large binaries via Git LFS.
+# (Small text files like builder-debug.yml stay as plain text.)
+dist-marker/**/*.exe filter=lfs diff=lfs merge=lfs -text
+dist-marker/**/*.dll filter=lfs diff=lfs merge=lfs -text
+dist-marker/**/*.pak filter=lfs diff=lfs merge=lfs -text
+dist-marker/**/*.dat filter=lfs diff=lfs merge=lfs -text
+dist-marker/**/*.bin filter=lfs diff=lfs merge=lfs -text
+dist-marker/win-unpacked/LICENSES.chromium.html filter=lfs diff=lfs merge=lfs -text
 dist-marker/** filter=lfs diff=lfs merge=lfs -text

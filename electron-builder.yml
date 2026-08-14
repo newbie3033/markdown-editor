@@ -1,0 +1,81 @@
+appId: com.inkmark.app
+productName: InkMark
+copyright: Copyright © 2026 InkMark
+
+directories:
+  buildResources: build
+  output: dist
+
+# The renderer is fully bundled by Vite and the main/preload processes only use
+# Electron + Node built-ins, so no node_modules are required at runtime.
+files:
+  - out/**/*
+  - package.json
+  - "!**/*.map"
+
+asar: true
+npmRebuild: false
+
+# Electron fuses: shave startup time and harden the packaged binary.
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  onlyLoadAppFromAsar: true
+  enableEmbeddedAsarIntegrityValidation: true
+
+# Keep the build environment self-contained: the Electron runtime archives and
+# all electron-builder tooling live inside the project (`.cache/`), so nothing
+# is downloaded to or installed on the host machine.
+electronDownload:
+  cache: .cache/electron
+
+electronLanguages:
+  - en-US
+  - zh-CN
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Office
+  syncDesktopName: true
+  maintainer: InkMark <inkmark@example.com>
+  synopsis: A Typora-style Markdown editor
+  description: A WYSIWYG Markdown editor for the desktop.
+  artifactName: '${productName}-${version}-${arch}.${ext}'
+
+# Windows: NSIS installer + portable single-exe.
+win:
+  target:
+    - nsis
+    - portable
+  artifactName: '${productName}-Setup-${version}-${arch}.${ext}'
+
+nsis:
+  # Custom script = a copy of electron-builder's own NSIS template. This makes
+  # electron-builder skip its wine-based uninstaller pre-extraction step
+  # (the uninstaller is instead written at install time, as NSIS normally
+  # does), so Windows packages can be cross-built without Wine. The copy was
+  # taken from app-builder-lib 26.15.3 (templates/nsis); refresh it when
+  # upgrading electron-builder.
+  script: nsis/installer.nsi
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+portable:
+  artifactName: '${productName}-${version}-portable-${arch}.${ext}'
+  requestExecutionLevel: user
+
+mac:
+  target:
+    - dmg
+  category: public.app-category.productivity
+  artifactName: '${productName}-${version}-${arch}.${ext}'
+
+dmg:
+  artifactName: '${productName}-${version}-${arch}.${ext}'

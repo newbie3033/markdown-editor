@@ -10,7 +10,8 @@ engine), packaged for Windows, macOS, and Linux with **electron-builder**.
 
 - **WYSIWYG editing** — Markdown syntax renders inline (`**bold**` → **bold**,
   `# Heading` → a real heading, tables, task lists, blockquotes, fenced code
-  blocks with syntax highlighting).
+  blocks with syntax highlighting). Code blocks show a **copy button** that
+  copies the code to the clipboard.
 - **Source code mode** — toggle with `Ctrl+/` to see and edit raw Markdown.
 - **Images: paste & drag-drop** — paste a screenshot or drop an image file to
   copy it next to the document (`<doc dir>/assets/`) and insert a relative
@@ -18,7 +19,8 @@ engine), packaged for Windows, macOS, and Linux with **electron-builder**.
   folder. Relative paths resolve correctly in the editor and in HTML/PDF
   exports.
 - **Documents: drag to open** — drop a `.md`/`.markdown`/`.txt` file anywhere in
-  the window (or into the editor) to open it.
+  the window (or into the editor) to open it; drop a **folder** to open it in
+  the sidebar. Paths are resolved via Electron's `webUtils.getPathForFile`.
 - **Right-click context menu** — insert headings, bold/italic/strikethrough,
   inline code, links, images, quotes, code blocks, bullet/ordered/task lists,
   tables, and horizontal rules with one click.
@@ -38,8 +40,15 @@ engine), packaged for Windows, macOS, and Linux with **electron-builder**.
   file directly in InkMark (or with the system default app for other types);
   Ctrl/Cmd+click also navigates.
 - **File explorer sidebar** — open a folder and browse all `.md` files
-  (`Ctrl+Shift+O`).
+  (`Ctrl+Shift+O`). The file and outline sidebars are **drag-resizable**
+  (double-click the edge to reset) and can be toggled with the 📁 / ☰ icons in
+  the status bar (or `Ctrl+Shift+1` / `Ctrl+Shift+2`); widths persist across
+  sessions.
 - **Outline sidebar** — a live table of contents that scrolls to headings.
+- **Edit / Read-only modes** — toggle via the ✏️/🔒 status bar button or
+  *View → Read-only Mode*: read-only disables editing (typing, context-menu
+  inserts, image drops) while navigation/search/export keep working; the window
+  title shows a “（只读）” suffix.
 - **Open / Save / Save As / New** — standard file operations (`Ctrl+O`, `Ctrl+S`,
   `Ctrl+Shift+S`, `Ctrl+N`).
 - **Export** — HTML, PDF, and Print (with relative images/links rewritten to
@@ -49,7 +58,9 @@ engine), packaged for Windows, macOS, and Linux with **electron-builder**.
 - **Light & dark themes** — Typora/GitHub-inspired styling.
 - **Status bar** — word / character / line counts, language/theme/source-mode
   toggles, and the current **zoom level** with − / ＋ controls (click the
-  percentage to reset to 100%).
+  percentage to reset to 100%). The **file path is click-to-copy** with a small
+  success/failure toast. **Right-click the status bar** for a menu of checkboxes
+  to show/hide each item (persisted across sessions).
 - **Single-instance + "open with"** — double-click a `.md` file or open from the
   terminal (`inkmark file.md`).
 
@@ -133,7 +144,7 @@ INKMARK_SELFTEST=1 npx electron . --no-sandbox --user-data-dir=./.tmp-selftest
 # Linux: AppImage + .deb
 npm run build:linux
 
-# Windows: portable single-exe (no installer)
+# Windows: NSIS installer + portable single-exe
 npm run build:win
 
 # macOS: .dmg
@@ -145,11 +156,40 @@ npm run build:unpack
 
 Artifacts are written to `dist/`. The app icon lives at `build/icon.png`.
 
+The Help menu links to the open-source repository
+(https://github.com/newbie3033/markdown-editor), and *Help → About* shows the
+version with a one-click button to open the repository.
+
 | Platform | Artifacts |
 | -------- | --------- |
 | Linux    | `InkMark-1.0.0-x86_64.AppImage`, `InkMark-1.0.0-amd64.deb` |
-| Windows  | `InkMark-1.0.0-portable-x64.exe` — portable single-exe, no install |
+| Windows  | `InkMark-Setup-1.0.0-x64.exe` (NSIS installer), `InkMark-1.0.0-portable-x64.exe` (portable single-exe, no install) |
 | macOS    | `InkMark-1.0.0-<arch>.dmg` |
+
+### Release artifacts & Git LFS
+
+Release artifacts are versioned in this repository via **Git LFS** so every
+tag ships with its binaries. `.gitattributes` routes the binaries
+(`*.exe`, `*.AppImage`, `*.deb`, `*.dmg`, …) to LFS storage; the
+repository stores small pointer files while the binaries live on the LFS
+server. This keeps `git clone`/`git fetch` fast while `git lfs pull` fetches
+the binaries on demand.
+
+```bash
+# one-time per machine
+git lfs install
+
+# fetch the binaries for the current checkout
+git lfs pull
+
+# show which files are stored as LFS pointers
+git lfs ls-files
+```
+
+`git lfs install` installs the clean/smudge filter hooks into the repository,
+so building and committing new artifacts (`dist/`) automatically stores them
+through LFS. If `git-lfs` is not on your `PATH`, install it from
+<https://git-lfs.com> or `apt install git-lfs` before cloning.
 
 ### Portable behavior (Windows)
 
@@ -160,9 +200,14 @@ by the main process. Put the exe on a USB stick and settings travel with it.
 
 ### Platform notes
 
-- **Windows from Linux/macOS — no Wine, no NSIS setup.** Only the portable
-  target is built, which uses electron-builder's built-in portable template and
-  never needs Wine. Code signing is not configured; the exe is unsigned.
+- **Windows from Linux/macOS — no Wine, no system packages.** Both the NSIS
+  installer and the portable exe cross-build natively. The project ships a
+  custom NSIS script in `build/nsis/` (a copy of electron-builder's own
+  template: the uninstaller is written at install time via `WriteUninstaller`
+  and all template includes are absolute paths), which makes electron-builder
+  skip its Wine-based uninstaller pre-extraction step. Refresh the copy from
+  `node_modules/app-builder-lib/templates/nsis` when upgrading electron-builder.
+  Code signing is not configured; the packages are unsigned.
 - **Linux (AppImage sandbox):** some distributions (notably Ubuntu 24.04 with
   `kernel.apparmor_restrict_unprivileged_userns=1`) block the Chromium sandbox.
   If the app fails to start from an AppImage, run it with `--no-sandbox`, or
