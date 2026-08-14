@@ -1,7 +1,7 @@
 // Self-test harness for headless verification.
 // Only runs when INKMARK_SELFTEST=1 is set; results are logged to stderr.
 
-import { app, clipboard, dialog, shell, type BrowserWindow } from 'electron'
+import { app, clipboard, dialog, Menu, shell, type BrowserWindow } from 'electron'
 import { existsSync, promises as fs } from 'node:fs'
 import { basename, join } from 'node:path'
 import { IPC, REPOSITORY_URL } from '../shared/ipc'
@@ -58,6 +58,40 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     }
     check('editor mounted', mounted)
     console.log('[SELFTEST] INFO editor mounted in ~' + mountMs + 'ms')
+
+    // 0d. Menu accelerators follow the Typora layout: zoom uses the Shift
+    // variants (freeing Ctrl+0/=/- for paragraph / heading level), panel keys
+    // are Ctrl+Shift+1/2/3/L, Ctrl+H opens replace, and Ctrl+Shift+I is free
+    // for "insert image" (DevTools moved to F12).
+    const accelerators: Record<string, string> = {}
+    const collect = (items: Electron.MenuItem[]): void => {
+      for (const item of items) {
+        if (item.accelerator) accelerators[item.accelerator] = item.label
+        if (item.submenu) collect(item.submenu.items)
+      }
+    }
+    collect(Menu.getApplicationMenu()?.items ?? [])
+    check(
+      'menu zoom keys shifted (Typora layout)',
+      accelerators['CmdOrCtrl+Shift+0'] !== undefined &&
+        accelerators['CmdOrCtrl+Shift+='] !== undefined &&
+        accelerators['CmdOrCtrl+Shift+-'] !== undefined &&
+        accelerators['CmdOrCtrl+0'] === undefined &&
+        accelerators['CmdOrCtrl+='] === undefined,
+      JSON.stringify(Object.keys(accelerators).sort())
+    )
+    check(
+      'menu panel keys Ctrl+Shift+1/2/3/L',
+      accelerators['CmdOrCtrl+Shift+1'] !== undefined &&
+        accelerators['CmdOrCtrl+Shift+2'] !== undefined &&
+        accelerators['CmdOrCtrl+Shift+3'] !== undefined &&
+        accelerators['CmdOrCtrl+Shift+L'] !== undefined
+    )
+    check('menu replace Ctrl+H', accelerators['CmdOrCtrl+H'] !== undefined)
+    check(
+      'devtools freed Ctrl+Shift+I',
+      accelerators['CmdOrCtrl+Shift+I'] === undefined && accelerators['F12'] !== undefined
+    )
 
     // 0c. Startup "open with": a markdown file passed on the command line must
     // be displayed (not the welcome doc) and must not be marked dirty.
@@ -150,6 +184,74 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     check('context menu opens', menuInfo?.ok === true, JSON.stringify(menuInfo?.labels))
     check('context menu hr command', menuInfo?.before === false && menuInfo?.after === true)
     check('context menu closes after click', menuInfo?.menuClosed === true)
+
+    // 4b. Context-menu clipboard: Copy / Cut / Paste.
+    await js(`(window.__inkmarkSelectAll(), true)`)
+    await sleep(300)
+    const copyMenu = (await js(`(async () => {
+      const pm = document.querySelector('.ProseMirror')
+      pm.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 320, clientY: 260 }))
+      await new Promise(r => setTimeout(r, 400))
+      const labels = Array.from(document.querySelectorAll('.ctx-menu .ctx-item .ctx-label')).map(e => e.textContent)
+      const copyBtn = Array.from(document.querySelectorAll('.ctx-item')).find(b => (b.textContent || '').startsWith('复制'))
+      const disabled = copyBtn?.disabled
+      if (copyBtn) copyBtn.click()
+      await new Promise(r => setTimeout(r, 300))
+      return { labels: labels.slice(0, 3), disabled }
+    })()`)) as { labels?: string[]; disabled?: boolean }
+    check(
+      'context menu shows clipboard items',
+      JSON.stringify(copyMenu?.labels) === JSON.stringify(['复制', '剪切', '粘贴']),
+      JSON.stringify(copyMenu?.labels)
+    )
+    check('copy enabled with selection', copyMenu?.disabled === false)
+    const copiedText = clipboard.readText()
+    check('context menu copy writes selection', copiedText.includes('InkMark'), JSON.stringify(copiedText))
+    const cutMenu = (await js(`(async () => {
+      window.__inkmarkSelectAll()
+      await new Promise(r => setTimeout(r, 200))
+      const pm = document.querySelector('.ProseMirror')
+      pm.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 320, clientY: 260 }))
+      await new Promise(r => setTimeout(r, 400))
+      const cutBtn = Array.from(document.querySelectorAll('.ctx-item')).find(b => (b.textContent || '').startsWith('剪切'))
+      if (!cutBtn) return { ok: false }
+      cutBtn.click()
+      await new Promise(r => setTimeout(r, 400))
+      return { ok: true, md: window.__inkmarkGetMarkdown() }
+    })()`)) as { ok?: boolean; md?: string | null }
+    check(
+      'context menu cut removes selection',
+      cutMenu?.ok === true && (cutMenu?.md ?? '').trim() === '',
+      JSON.stringify(cutMenu?.md)
+    )
+    check('context menu cut copies selection', clipboard.readText().includes('InkMark'))
+    const copyDisabled = (await js(`(async () => {
+      const pm = document.querySelector('.ProseMirror')
+      pm.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 320, clientY: 260 }))
+      await new Promise(r => setTimeout(r, 400))
+      const copyBtn = Array.from(document.querySelectorAll('.ctx-item')).find(b => (b.textContent || '').startsWith('复制'))
+      const disabled = copyBtn?.disabled ?? null
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await new Promise(r => setTimeout(r, 200))
+      return { disabled }
+    })()`)) as { disabled?: boolean | null }
+    check('copy disabled without selection', copyDisabled?.disabled === true)
+    clipboard.writeText('# Pasted Heading')
+    const pasteMenu = (await js(`(async () => {
+      const pm = document.querySelector('.ProseMirror')
+      pm.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 320, clientY: 260 }))
+      await new Promise(r => setTimeout(r, 400))
+      const pasteBtn = Array.from(document.querySelectorAll('.ctx-item')).find(b => (b.textContent || '').startsWith('粘贴'))
+      if (!pasteBtn) return { ok: false }
+      pasteBtn.click()
+      await new Promise(r => setTimeout(r, 500))
+      return { ok: true, md: window.__inkmarkGetMarkdown() }
+    })()`)) as { ok?: boolean; md?: string | null }
+    check(
+      'context menu paste inserts clipboard text',
+      pasteMenu?.ok === true && (pasteMenu?.md ?? '').includes('# Pasted Heading'),
+      JSON.stringify(pasteMenu?.md)
+    )
 
     // 5. Paste an image file into the editor.
     const paste = (await js(`(async () => {
@@ -296,25 +398,33 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       JSON.stringify(searchName?.map((r) => r.name))
     )
 
-    const wildcardName = (await js(
-      `window.api.searchFiles('/tmp/inkmark-selftest/docs', 'search-*', 'wildcard')`
+    const regexName = (await js(
+      `window.api.searchFiles('/tmp/inkmark-selftest/docs', 'search-.*', { regex: true })`
     )) as Array<{ name: string; nameMatch: boolean }>
     check(
-      'wildcard filename search',
-      Array.isArray(wildcardName) && wildcardName.some((r) => r.name === 'search-test.md' && r.nameMatch),
-      JSON.stringify(wildcardName?.map((r) => r.name))
+      'regex filename search',
+      Array.isArray(regexName) && regexName.some((r) => r.name === 'search-test.md' && r.nameMatch),
+      JSON.stringify(regexName?.map((r) => r.name))
     )
-    const wildcardContent = (await js(
-      `window.api.searchFiles('/tmp/inkmark-selftest/docs', 'h*llo', 'wildcard')`
+    const caseSensitive = (await js(
+      `window.api.searchFiles('/tmp/inkmark-selftest/docs', 'hello', { caseSensitive: true })`
     )) as Array<{ name: string; matches: unknown[] }>
     check(
-      'wildcard content search',
-      Array.isArray(wildcardContent) &&
-        wildcardContent.some((r) => r.name === 'search-test.md' && r.matches.length === 2),
-      JSON.stringify(wildcardContent?.map((r) => ({ name: r.name, matches: r.matches.length })))
+      'case-sensitive content search',
+      Array.isArray(caseSensitive) &&
+        caseSensitive.some((r) => r.name === 'search-test.md' && r.matches.length === 1),
+      JSON.stringify(caseSensitive?.map((r) => ({ name: r.name, matches: r.matches.length })))
+    )
+    const wholeWord = (await js(
+      `window.api.searchFiles('/tmp/inkmark-selftest/docs', 'hell', { wholeWord: true })`
+    )) as Array<{ name: string; matches: unknown[] }>
+    check(
+      'whole-word content search',
+      Array.isArray(wholeWord) && wholeWord.length === 0,
+      JSON.stringify(wholeWord?.map((r) => ({ name: r.name, matches: r.matches.length })))
     )
     const regexContent = (await js(
-      `window.api.searchFiles('/tmp/inkmark-selftest/docs', '^foo', 'regex')`
+      `window.api.searchFiles('/tmp/inkmark-selftest/docs', '^foo', { regex: true })`
     )) as Array<{ name: string; matches: unknown[] }>
     check(
       'regex content search (line anchor)',
@@ -323,7 +433,7 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       JSON.stringify(regexContent?.map((r) => ({ name: r.name, matches: r.matches.length })))
     )
     const invalidRegex = (await js(
-      `window.api.searchFiles('/tmp/inkmark-selftest/docs', '([unclosed', 'regex')`
+      `window.api.searchFiles('/tmp/inkmark-selftest/docs', '([unclosed', { regex: true })`
     )) as unknown[]
     check('invalid regex returns empty', Array.isArray(invalidRegex) && invalidRegex.length === 0)
 
@@ -386,8 +496,8 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       Array.isArray(regexUi?.files) && regexUi.files.includes('search-test.md'),
       JSON.stringify(regexUi?.files)
     )
-    // Back to text mode for later tests.
-    await js(`(Array.from(document.querySelectorAll('.search-panel .mode-btn'))[0]?.click(), true)`)
+    // Turn the regex toggle back off for later tests.
+    await js(`(Array.from(document.querySelectorAll('.search-panel .mode-btn'))[2]?.click(), true)`)
 
     // 12. In-document find bar: count matches, Enter navigates and selects.
     win.webContents.send(IPC.menuAction, 'find')
@@ -416,28 +526,198 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       find?.ok === true && find?.count2 === '2/2' && find?.sel2 === 'hello',
       JSON.stringify(find)
     )
-    const findWildcard = (await js(`(async () => {
+    // VS Code-style options: Aa (case), ab (whole word), .* (regex).
+    const findCase = (await js(`(async () => {
       const buttons = Array.from(document.querySelectorAll('.findbar .mode-btn'))
+      buttons[0]?.click()
+      await new Promise(r => setTimeout(r, 200))
+      const input = document.querySelector('.findbar input')
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setter.call(input, 'hello')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      await new Promise(r => setTimeout(r, 600))
+      return { count: document.querySelector('.find-count')?.textContent?.trim() }
+    })()`)) as { count?: string }
+    check('find bar case-sensitive (Aa)', findCase?.count === '1/1', JSON.stringify(findCase))
+    const findWholeWord = (await js(`(async () => {
+      const buttons = Array.from(document.querySelectorAll('.findbar .mode-btn'))
+      buttons[0]?.click()
       buttons[1]?.click()
       await new Promise(r => setTimeout(r, 200))
       const input = document.querySelector('.findbar input')
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
-      setter.call(input, 'h*llo')
+      setter.call(input, 'hell')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      await new Promise(r => setTimeout(r, 600))
+      buttons[1]?.click()
+      await new Promise(r => setTimeout(r, 400))
+      const without = document.querySelector('.find-count')?.textContent?.trim()
+      buttons[1]?.click()
+      await new Promise(r => setTimeout(r, 400))
+      return {
+        with: document.querySelector('.find-count')?.textContent?.trim(),
+        without
+      }
+    })()`)) as { with?: string; without?: string }
+    check(
+      'find bar whole-word (ab)',
+      findWholeWord?.with === '无匹配' && findWholeWord?.without === '1/2',
+      JSON.stringify(findWholeWord)
+    )
+    const findRegex = (await js(`(async () => {
+      const buttons = Array.from(document.querySelectorAll('.findbar .mode-btn'))
+      buttons[2]?.click()
+      await new Promise(r => setTimeout(r, 200))
+      const input = document.querySelector('.findbar input')
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setter.call(input, 'h.llo')
       input.dispatchEvent(new Event('input', { bubbles: true }))
       await new Promise(r => setTimeout(r, 600))
       const count = document.querySelector('.find-count')?.textContent?.trim()
+      buttons[2]?.click()
+      await new Promise(r => setTimeout(r, 400))
       return { count }
     })()`)) as { count?: string }
-    check(
-      'find bar wildcard mode',
-      findWildcard?.count === '1/2',
-      JSON.stringify(findWildcard)
-    )
+    check('find bar regex (.*)', findRegex?.count === '1/2', JSON.stringify(findRegex))
+    // Leave all toggles off for the replace tests.
+    await js(`(async () => {
+      const buttons = Array.from(document.querySelectorAll('.findbar .mode-btn'))
+      if (buttons[0]?.classList.contains('active')) buttons[0].click()
+      if (buttons[1]?.classList.contains('active')) buttons[1].click()
+      if (buttons[2]?.classList.contains('active')) buttons[2].click()
+      return true
+    })()`)
 
     // Close the find bar.
     await js(`(document.querySelector('.findbar .find-btn:last-child')?.click(), true)`)
 
-    // 12c. Status bar zoom display.
+    // 12b. Find & replace: the Ctrl+H menu action opens the replace row;
+    // replace one occurrence, then replace all.
+    win.webContents.send(IPC.menuAction, 'replace')
+    await sleep(400)
+    const replaceUi = (await js(`(async () => {
+      const input = document.querySelector('.findbar input')
+      const repInput = document.querySelector('.findbar .findbar-replace input')
+      if (!input || !repInput) return { ok: false }
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setter.call(input, 'hello')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      setter.call(repInput, 'WORLD')
+      repInput.dispatchEvent(new Event('input', { bubbles: true }))
+      await new Promise(r => setTimeout(r, 600))
+      const count = document.querySelector('.find-count')?.textContent?.trim()
+      const one = document.querySelector('.findbar-replace .replace-btn')
+      if (!one) return { ok: false }
+      one.click()
+      await new Promise(r => setTimeout(r, 700))
+      const afterOne = window.__inkmarkGetMarkdown()
+      const allBtn = Array.from(document.querySelectorAll('.findbar-replace .replace-btn'))[1]
+      allBtn?.click()
+      await new Promise(r => setTimeout(r, 700))
+      return { ok: true, count, afterOne, afterAll: window.__inkmarkGetMarkdown() }
+    })()`)) as { ok?: boolean; count?: string; afterOne?: string | null; afterAll?: string | null }
+    check(
+      'replace row opens via Ctrl+H action',
+      replaceUi?.ok === true && replaceUi?.count === '1/2',
+      JSON.stringify({ ok: replaceUi?.ok, count: replaceUi?.count })
+    )
+    check(
+      'replace one occurrence',
+      (replaceUi?.afterOne ?? '').includes('WORLD world') &&
+        (replaceUi?.afterOne ?? '').includes('HELLO again'),
+      JSON.stringify(replaceUi?.afterOne)
+    )
+    check(
+      'replace all occurrences',
+      (replaceUi?.afterAll ?? '').includes('WORLD world') &&
+        (replaceUi?.afterAll ?? '').includes('WORLD again') &&
+        !(replaceUi?.afterAll ?? '').toLowerCase().includes('hello'),
+      JSON.stringify(replaceUi?.afterAll)
+    )
+
+    // 12c. Typora-style editor keymaps (Ctrl+1..6 headings, Ctrl+0 paragraph,
+    // Ctrl+=/- heading level, Ctrl+Shift+K code fence, Ctrl+Shift+Q quote,
+    // Ctrl+Shift+[ / ] lists, Ctrl+T table). Each block-level shortcut is
+    // preceded by Ctrl+0 so every command runs on a plain paragraph.
+    const press = async (key: string, ctrl = true, shift = false): Promise<void> => {
+      await js(`(async () => {
+        const pm = document.querySelector('.ProseMirror')
+        pm.focus()
+        pm.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, ctrlKey: ${ctrl}, shiftKey: ${shift}, bubbles: true, cancelable: true }))
+        await new Promise(r => setTimeout(r, 300))
+        return true
+      })()`)
+    }
+    const h1Count = async (): Promise<number> =>
+      (await js(`document.querySelectorAll('.ProseMirror h1').length`)) as number
+    await press('1')
+    check('Ctrl+1 heading', (await h1Count()) === 2, String(await h1Count()))
+    await press('0')
+    check('Ctrl+0 paragraph', (await h1Count()) === 1, String(await h1Count()))
+    await press('=')
+    check('Ctrl+= increase heading', (await h1Count()) === 2, String(await h1Count()))
+    await press('-')
+    check('Ctrl+- decrease heading', (await h1Count()) === 1, String(await h1Count()))
+    await press('[', true, true)
+    check(
+      'Ctrl+Shift+[ ordered list',
+      (await js(`!!document.querySelector('.ProseMirror ol')`)) === true
+    )
+    await press('0')
+    await press(']', true, true)
+    check(
+      'Ctrl+Shift+] bullet list',
+      (await js(`!!document.querySelector('.ProseMirror ul')`)) === true
+    )
+    await press('0')
+    await press('q', true, true)
+    check(
+      'Ctrl+Shift+Q blockquote',
+      (await js(`!!document.querySelector('.ProseMirror blockquote')`)) === true
+    )
+    await press('0')
+    await press('k', true, true)
+    check(
+      'Ctrl+Shift+K code fence',
+      (await js(`!!document.querySelector('.ProseMirror pre')`)) === true
+    )
+    await press('0')
+    await press('t')
+    check(
+      'Ctrl+T table',
+      (await js(`!!document.querySelector('.ProseMirror table')`)) === true
+    )
+    // Close the find bar again (it was reopened by the replace action).
+    await js(`(document.querySelector('.findbar .find-btn:last-child')?.click(), true)`)
+    await sleep(200)
+
+    // 12d. New document: focus moves to the editor and the caret is shown.
+    await js(`(document.querySelector('.zoom-in')?.focus(), true)`)
+    win.webContents.send(IPC.menuAction, 'new')
+    await sleep(500)
+    const afterNew = (await js(`(async () => {
+      const pm = document.querySelector('.ProseMirror')
+      return {
+        isPm: document.activeElement === pm,
+        h1Gone: !document.querySelector('.ProseMirror h1')
+      }
+    })()`)) as { isPm?: boolean; h1Gone?: boolean }
+    check('new document focuses editor', afterNew?.isPm === true, JSON.stringify(afterNew))
+    check('new document clears content', afterNew?.h1Gone === true)
+    // Source mode variant: the textarea gets the caret instead.
+    win.webContents.send(IPC.menuAction, 'toggle-source')
+    await sleep(400)
+    await js(`(document.querySelector('.zoom-in')?.focus(), true)`)
+    win.webContents.send(IPC.menuAction, 'new')
+    await sleep(400)
+    const srcFocus = (await js(
+      `document.activeElement === document.querySelector('.source-editor')`
+    )) as boolean
+    check('new document focuses source editor', srcFocus === true)
+    win.webContents.send(IPC.menuAction, 'toggle-source')
+    await sleep(400)
+
+    // 12e. Status bar zoom display.
     const zoomInitial = (await js(`document.querySelector('.zoom-value')?.textContent`)) as string | null
     check('status bar shows zoom', zoomInitial === '100%', String(zoomInitial))
     const zoomIn = (await js(`(async () => {
@@ -882,6 +1162,42 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     )
     dialog.showMessageBox = originalShowMessageBox
 
+    // 15b. Saving a new document lists it in the sidebar: outside any open
+    // folder as a loose file, inside an open folder in its (refreshed) tree.
+    win.webContents.send(IPC.menuAction, 'new')
+    await sleep(400)
+    const originalShowSave3 = dialog.showSaveDialog.bind(dialog)
+    dialog.showSaveDialog = (async () => ({
+      canceled: false,
+      filePath: join(TEST_DIR, 'saved-new.md')
+    })) as typeof dialog.showSaveDialog
+    try {
+      win.webContents.send(IPC.menuAction, 'save')
+      await sleep(900)
+    } finally {
+      dialog.showSaveDialog = originalShowSave3
+    }
+    const savedLoose = (await js(
+      `Array.from(document.querySelectorAll('.loose-row')).some(r => (r.textContent || '').includes('saved-new.md'))`
+    )) as boolean
+    check('saved new document listed as loose file', savedLoose === true)
+    win.webContents.send(IPC.menuAction, 'new')
+    await sleep(400)
+    dialog.showSaveDialog = (async () => ({
+      canceled: false,
+      filePath: join(TEST_DIR, 'docs', 'saved-in-folder.md')
+    })) as typeof dialog.showSaveDialog
+    try {
+      win.webContents.send(IPC.menuAction, 'save')
+      await sleep(1200)
+    } finally {
+      dialog.showSaveDialog = originalShowSave3
+    }
+    const savedInTree = (await js(
+      `Array.from(document.querySelectorAll('.tree .tree-name')).some(n => n.textContent === 'saved-in-folder.md')`
+    )) as boolean
+    check('saved document appears in open folder tree', savedInTree === true)
+
     // 16. Hyperlinks: web link → external browser; local link → open in app;
     // ctrl+click also navigates.
     await fs.writeFile(join(TEST_DIR, 'docs', 'link-target.md'), '# Target File\n\nYou reached the target.\n')
@@ -938,6 +1254,21 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     shell.openExternal = originalOpenExternal
 
     // 17. Welcome page: first launch only, reopenable via File menu.
+    // 16c. Panel open/close state persists across restarts: hide both panels,
+    // then verify they stay hidden after the renderer reload below.
+    win.webContents.send(IPC.menuAction, 'toggle-sidebar')
+    await sleep(300)
+    win.webContents.send(IPC.menuAction, 'toggle-outline')
+    await sleep(300)
+    const panelsHidden = (await js(`(async () => ({
+      sidebar: !!document.querySelector('.app > aside.sidebar:not(.outline-sidebar)'),
+      outline: !!document.querySelector('.app > aside.sidebar.outline-sidebar')
+    }))()`)) as { sidebar?: boolean; outline?: boolean }
+    check(
+      'panels hidden before reload',
+      panelsHidden?.sidebar === false && panelsHidden?.outline === false,
+      JSON.stringify(panelsHidden)
+    )
     await js(`localStorage.setItem('inkmark.welcomeSeen', '1'); true`)
     win.webContents.reload()
     let remounted = false
@@ -952,6 +1283,15 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     }
     check('renderer remounted after reload', remounted)
     await sleep(600)
+    const panelsAfter = (await js(`(async () => ({
+      sidebar: !!document.querySelector('.app > aside.sidebar:not(.outline-sidebar)'),
+      outline: !!document.querySelector('.app > aside.sidebar.outline-sidebar')
+    }))()`)) as { sidebar?: boolean; outline?: boolean }
+    check(
+      'panel visibility persists after reload',
+      panelsAfter?.sidebar === false && panelsAfter?.outline === false,
+      JSON.stringify(panelsAfter)
+    )
     const blankH1 = (await js(`document.querySelector('.ProseMirror h1')?.textContent ?? null`)) as string | null
     check('welcome page only on first launch', blankH1 == null, String(blankH1))
     win.webContents.send(IPC.menuAction, 'welcome')

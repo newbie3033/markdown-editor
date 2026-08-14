@@ -1,7 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { editorViewCtx, type Editor } from '@milkdown/kit/core'
+import { TextSelection } from '@milkdown/prose/state'
 import { getMarkdown, getHTML, replaceAll } from '@milkdown/kit/utils'
-import type { MenuAction, SearchMode } from '../../shared/ipc'
+import type { MenuAction, SearchFlags } from '../../shared/ipc'
 const MarkdownEditor = lazy(() =>
   import('./components/MarkdownEditor').then((module) => ({ default: module.MarkdownEditor }))
 )
@@ -14,6 +15,7 @@ import { buildHtmlDocument, absolutizeUrls } from './lib/export'
 import { appendImage } from './lib/commands'
 import { findTextMatches, selectMatch } from './lib/search'
 import { useResizableWidth } from './lib/useResizableWidth'
+import { usePersistentBoolean } from './lib/usePersistentBoolean'
 import {
   computeStats,
   dirNameFromPath,
@@ -37,10 +39,12 @@ export default function App(): React.JSX.Element {
   const [markdown, setMarkdown] = useState<string>('')
   const [dirty, setDirty] = useState(false)
   const [sourceMode, setSourceMode] = useState(false)
-  const [showSidebar, setShowSidebar] = useState(true)
-  const [showOutline, setShowOutline] = useState(true)
+  // Panel visibility persists across sessions (same as the panel widths).
+  const [showSidebar, setShowSidebar] = usePersistentBoolean('inkmark.showSidebar', true)
+  const [showOutline, setShowOutline] = usePersistentBoolean('inkmark.showOutline', true)
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('files')
   const [findOpen, setFindOpen] = useState(false)
+  const [replaceOpen, setReplaceOpen] = useState(false)
   const [readOnly, setReadOnly] = useState(false)
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
   const [outline, setOutline] = useState<OutlineItem[]>([])
@@ -75,6 +79,8 @@ export default function App(): React.JSX.Element {
   const closeRequestRef = useRef(false)
   const readOnlyRef = useRef(readOnly)
   readOnlyRef.current = readOnly
+  const sourceModeRef = useRef(sourceMode)
+  sourceModeRef.current = sourceMode
 
   const stats = useMemo(() => computeStats(markdown), [markdown])
   const title = fileNameFromPath(filePath) || t('status.untitled')
@@ -121,6 +127,21 @@ export default function App(): React.JSX.Element {
     zoomRef.current = clamped
     setZoomLevel(clamped)
     void window.api.setZoom(clamped)
+  }, [])
+
+  // Focus the editor (or the source-mode textarea) and show the caret.
+  const focusEditor = useCallback(() => {
+    if (sourceModeRef.current) {
+      const textarea = textareaRef.current
+      if (textarea) {
+        textarea.focus()
+        textarea.setSelectionRange(0, 0)
+      }
+      return
+    }
+    editorRef.current?.action((ctx) => {
+      ctx.get(editorViewCtx).focus()
+    })
   }, [])
 
   const setReadOnlyMode = useCallback(
@@ -217,8 +238,9 @@ export default function App(): React.JSX.Element {
         // never marks a freshly opened file as dirty.
         cleanContentRef.current = normalizeMarkdown(editor.action(getMarkdown()) ?? content)
       }
+      focusEditor()
     },
-    [addToOpenFiles]
+    [addToOpenFiles, focusEditor]
   )
 
   const openFile = useCallback(async () => {
@@ -249,7 +271,9 @@ export default function App(): React.JSX.Element {
     }
     const tree = await window.api.listMarkdown(path)
     setFolders((prev) =>
-      prev.some((folder) => folder.path === path) ? prev : [...prev, { path, tree }]
+      prev.some((folder) => folder.path === path)
+        ? prev.map((folder) => (folder.path === path ? { path, tree } : folder))
+        : [...prev, { path, tree }]
     )
     // Files now covered by this folder no longer need to be listed as loose.
     setOpenFiles((prev) =>
@@ -271,14 +295,14 @@ export default function App(): React.JSX.Element {
   }, [])
 
   const openSearchResult = useCallback(
-    async (path: string, matchIndex: number, query: string, mode: SearchMode = 'text') => {
+    async (path: string, matchIndex: number, query: string, flags: SearchFlags = {}) => {
       try {
         const content = await window.api.readFile(path)
         await loadDocument(path, content)
         if (matchIndex >= 0) {
           const editor = editorRef.current
           if (editor) {
-            const matches = findTextMatches(editor, query, mode)
+            const matches = findTextMatches(editor, query, flags)
             const match = matches[matchIndex] ?? matches[matches.length - 1]
             if (match) selectMatch(editor, match)
           }
@@ -290,25 +314,41 @@ export default function App(): React.JSX.Element {
     [loadDocument]
   )
 
-  const save = useCallback(async (saveAs = false) => {
-    const content = editorRef.current?.action(getMarkdown()) ?? markdownRef.current
-    const currentPath = filePathRef.current
-    // Baseline against the canonical serialization of what will be saved, so
-    // the document does not flip back to "dirty" right after saving.
-    const canonical = normalizeMarkdown(content)
-    if (!currentPath || saveAs) {
-      const result = await window.api.saveFileDialog(currentPath, content)
-      if (!result.canceled && result.path) {
-        setFilePath(result.path)
+  const save = useCallback(
+    async (saveAs = false) => {
+      const content = editorRef.current?.action(getMarkdown()) ?? markdownRef.current
+      const currentPath = filePathRef.current
+      // Baseline against the canonical serialization of what will be saved, so
+      // the document does not flip back to "dirty" right after saving.
+      const canonical = normalizeMarkdown(content)
+      if (!currentPath || saveAs) {
+        const result = await window.api.saveFileDialog(currentPath, content)
+        if (!result.canceled && result.path) {
+          const savedPath = result.path
+          const isNewPath = savedPath !== currentPath
+          setFilePath(savedPath)
+          setDirty(false)
+          cleanContentRef.current = canonical
+          if (isNewPath) {
+            // Show the freshly saved document in the sidebar: as a loose file,
+            // or in the open folder's tree (refreshed to pick it up).
+            addToOpenFiles(savedPath)
+            const inside = foldersRef.current.find(
+              (folder) =>
+                savedPath.startsWith(folder.path + '/') ||
+                savedPath.startsWith(folder.path + '\\')
+            )
+            if (inside) void openFolder(inside.path)
+          }
+        }
+      } else {
+        await window.api.writeFile(currentPath, content)
         setDirty(false)
         cleanContentRef.current = canonical
       }
-    } else {
-      await window.api.writeFile(currentPath, content)
-      setDirty(false)
-      cleanContentRef.current = canonical
-    }
-  }, [])
+    },
+    [addToOpenFiles, openFolder]
+  )
 
   // The main process routes window closing through here: ask about unsaved
   // changes, then approve the close (or not).
@@ -373,7 +413,8 @@ export default function App(): React.JSX.Element {
       cleanContentRef.current = normalizeMarkdown(editor.action(getMarkdown()) ?? '')
       pendingContentRef.current = null
     }
-  }, [])
+    focusEditor()
+  }, [focusEditor])
 
   // File → Open Welcome Page: show the welcome document as an untitled page.
   const showWelcome = useCallback(() => {
@@ -389,7 +430,8 @@ export default function App(): React.JSX.Element {
       pendingContentRef.current = null
       cleanContentRef.current = normalizeMarkdown(editor.action(getMarkdown()) ?? welcome)
     }
-  }, [lang])
+    focusEditor()
+  }, [lang, focusEditor])
 
   const buildDocumentHtml = useCallback(() => {
     const body = editorRef.current?.action(getHTML()) ?? ''
@@ -421,6 +463,20 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     ;(window as unknown as { __inkmarkGetMarkdown?: () => string | null }).__inkmarkGetMarkdown = () =>
       editorRef.current?.action(getMarkdown()) ?? null
+  }, [])
+
+  // Debug/self-test hook: select the whole document (used to exercise the
+  // context-menu copy/cut flow headlessly).
+  useEffect(() => {
+    ;(window as unknown as { __inkmarkSelectAll?: () => void }).__inkmarkSelectAll = () => {
+      editorRef.current?.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        const { state } = view
+        const selection = TextSelection.create(state.doc, 0, state.doc.content.size)
+        view.dispatch(state.tr.setSelection(selection))
+        view.focus()
+      })
+    }
   }, [])
 
   const navigateOutline = useCallback((id: string) => {
@@ -486,6 +542,10 @@ export default function App(): React.JSX.Element {
         case 'find':
           setFindOpen(true)
           break
+        case 'replace':
+          setFindOpen(true)
+          setReplaceOpen(true)
+          break
         case 'search-folder':
           setShowSidebar(true)
           setSidebarTab('search')
@@ -495,6 +555,26 @@ export default function App(): React.JSX.Element {
           break
         case 'toggle-sidebar':
           setShowSidebar((v) => !v)
+          break
+        case 'toggle-articles':
+          // Typora "Articles" (Ctrl+Shift+2): open files + folder trees share
+          // one panel in InkMark, so show that panel on the files tab and
+          // toggle it off when it is already showing this view.
+          if (showSidebar && sidebarTab === 'files') {
+            setShowSidebar(false)
+          } else {
+            setSidebarTab('files')
+            setShowSidebar(true)
+          }
+          break
+        case 'toggle-file-tree':
+          // Typora "File Tree" (Ctrl+Shift+3): same panel/tab in InkMark.
+          if (showSidebar && sidebarTab === 'files') {
+            setShowSidebar(false)
+          } else {
+            setSidebarTab('files')
+            setShowSidebar(true)
+          }
           break
         case 'toggle-outline':
           setShowOutline((v) => !v)
@@ -546,6 +626,8 @@ export default function App(): React.JSX.Element {
       applyZoom,
       setReadOnlyMode,
       setLang,
+      showSidebar,
+      sidebarTab,
       t
     ]
   )
@@ -695,7 +777,8 @@ export default function App(): React.JSX.Element {
           onOpenFolder={() => void openFolder()}
           onCloseFolder={closeFolder}
           onCloseFile={(path) => void closeFile(path)}
-          onOpenSearchResult={(path, index, query) => void openSearchResult(path, index, query)}
+          onOpenSearchResult={(path, index, query, flags) =>
+            void openSearchResult(path, index, query, flags)}
         />
       )}
 
@@ -706,6 +789,12 @@ export default function App(): React.JSX.Element {
             sourceMode={sourceMode}
             sourceText={markdown}
             textareaRef={textareaRef}
+            replaceOpen={replaceOpen}
+            onToggleReplace={() => setReplaceOpen((v) => !v)}
+            onSourceReplace={(text) => {
+              setMarkdown(text)
+              setDirty(true)
+            }}
             onClose={() => setFindOpen(false)}
           />
         )}

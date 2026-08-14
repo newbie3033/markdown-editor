@@ -12,7 +12,7 @@ import {
   type SaveImageResult,
   type SaveResult,
   type SearchMatch,
-  type SearchMode
+  type SearchFlags
 } from '../shared/ipc'
 import { getLocale, setLocale, t } from './i18n'
 import { setReadOnlyMode } from './menu'
@@ -57,9 +57,9 @@ async function collectMarkdownFiles(
 async function searchFiles(
   folderPath: string,
   query: string,
-  mode: SearchMode = 'text'
+  flags: SearchFlags = {}
 ): Promise<FileSearchResult[]> {
-  const regex = compileSearchRegex(query, mode)
+  const regex = compileSearchRegex(query, flags)
   if (!regex) return []
 
   const files: string[] = []
@@ -68,7 +68,7 @@ async function searchFiles(
   const results: FileSearchResult[] = []
   for (const file of files) {
     const name = basename(file)
-    const nameRegex = compileSearchRegex(query, mode)
+    const nameRegex = compileSearchRegex(query, flags)
     const nameMatch = nameRegex?.test(name) ?? false
     let content = ''
     try {
@@ -77,7 +77,7 @@ async function searchFiles(
       // Skip unreadable files.
     }
     const matches: SearchMatch[] = []
-    const contentRegex = compileSearchRegex(query, mode)
+    const contentRegex = compileSearchRegex(query, flags)
     let globalIndex = 0
     let execResult: RegExpExecArray | null
     while (
@@ -340,8 +340,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   ipcMain.handle(
     IPC.searchFiles,
-    async (_event, folderPath: string, query: string, mode: SearchMode = 'text'): Promise<FileSearchResult[]> =>
-      searchFiles(folderPath, query, mode)
+    async (_event, folderPath: string, query: string, flags: SearchFlags = {}): Promise<FileSearchResult[]> =>
+      searchFiles(folderPath, query, flags)
   )
 
   ipcMain.handle(IPC.confirmSave, async (_event, fileName: string) => {

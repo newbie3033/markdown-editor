@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Editor } from '@milkdown/kit/core'
+import { editorStateCtx, editorViewCtx } from '@milkdown/kit/core'
 import { useI18n } from '../lib/i18n'
 import { runContextAction, type ContextMenuAction } from '../lib/commands'
 
@@ -13,11 +14,16 @@ interface EditorContextMenuProps {
 
 interface Item {
   action: ContextMenuAction
-  labelKey: 'ctx.h1' | 'ctx.h2' | 'ctx.h3' | 'ctx.bold' | 'ctx.italic' | 'ctx.strikethrough' | 'ctx.inlineCode' | 'ctx.link' | 'ctx.image' | 'ctx.quote' | 'ctx.codeBlock' | 'ctx.bulletList' | 'ctx.orderedList' | 'ctx.taskList' | 'ctx.table' | 'ctx.hr' | 'ctx.paragraph'
+  labelKey: 'ctx.copy' | 'ctx.cut' | 'ctx.paste' | 'ctx.h1' | 'ctx.h2' | 'ctx.h3' | 'ctx.bold' | 'ctx.italic' | 'ctx.strikethrough' | 'ctx.inlineCode' | 'ctx.link' | 'ctx.image' | 'ctx.quote' | 'ctx.codeBlock' | 'ctx.bulletList' | 'ctx.orderedList' | 'ctx.taskList' | 'ctx.table' | 'ctx.hr' | 'ctx.paragraph'
   shortcut?: string
 }
 
 const GROUPS: Item[][] = [
+  [
+    { action: 'copy', labelKey: 'ctx.copy', shortcut: 'Ctrl+C' },
+    { action: 'cut', labelKey: 'ctx.cut', shortcut: 'Ctrl+X' },
+    { action: 'paste', labelKey: 'ctx.paste', shortcut: 'Ctrl+V' }
+  ],
   [
     { action: 'h1', labelKey: 'ctx.h1', shortcut: 'Ctrl+1' },
     { action: 'h2', labelKey: 'ctx.h2', shortcut: 'Ctrl+2' },
@@ -26,26 +32,26 @@ const GROUPS: Item[][] = [
   [
     { action: 'bold', labelKey: 'ctx.bold', shortcut: 'Ctrl+B' },
     { action: 'italic', labelKey: 'ctx.italic', shortcut: 'Ctrl+I' },
-    { action: 'strikethrough', labelKey: 'ctx.strikethrough' },
-    { action: 'inlineCode', labelKey: 'ctx.inlineCode' }
+    { action: 'strikethrough', labelKey: 'ctx.strikethrough', shortcut: 'Alt+Shift+5' },
+    { action: 'inlineCode', labelKey: 'ctx.inlineCode', shortcut: 'Ctrl+Shift+`' }
   ],
   [
     { action: 'link', labelKey: 'ctx.link', shortcut: 'Ctrl+K' },
-    { action: 'image', labelKey: 'ctx.image' }
+    { action: 'image', labelKey: 'ctx.image', shortcut: 'Ctrl+Shift+I' }
   ],
   [
-    { action: 'quote', labelKey: 'ctx.quote' },
-    { action: 'codeBlock', labelKey: 'ctx.codeBlock' }
+    { action: 'quote', labelKey: 'ctx.quote', shortcut: 'Ctrl+Shift+Q' },
+    { action: 'codeBlock', labelKey: 'ctx.codeBlock', shortcut: 'Ctrl+Shift+K' }
   ],
   [
-    { action: 'bulletList', labelKey: 'ctx.bulletList' },
-    { action: 'orderedList', labelKey: 'ctx.orderedList' },
+    { action: 'bulletList', labelKey: 'ctx.bulletList', shortcut: 'Ctrl+Shift+]' },
+    { action: 'orderedList', labelKey: 'ctx.orderedList', shortcut: 'Ctrl+Shift+[' },
     { action: 'taskList', labelKey: 'ctx.taskList' }
   ],
   [
-    { action: 'table', labelKey: 'ctx.table' },
+    { action: 'table', labelKey: 'ctx.table', shortcut: 'Ctrl+T' },
     { action: 'hr', labelKey: 'ctx.hr' },
-    { action: 'paragraph', labelKey: 'ctx.paragraph' }
+    { action: 'paragraph', labelKey: 'ctx.paragraph', shortcut: 'Ctrl+0' }
   ]
 ]
 
@@ -58,6 +64,16 @@ export function EditorContextMenu({
 }: EditorContextMenuProps): React.JSX.Element {
   const { t } = useI18n()
   const menuRef = useRef<HTMLDivElement>(null)
+  // Whether the editor selection is non-empty when the menu opened (drives
+  // the disabled state of Copy / Cut).
+  const [hasSelection, setHasSelection] = useState(false)
+
+  useEffect(() => {
+    if (!editor) return
+    editor.action((ctx) => {
+      setHasSelection(!ctx.get(editorStateCtx).selection.empty)
+    })
+  }, [editor, x, y])
 
   // Clamp the menu inside the viewport once its size is known.
   useLayoutEffect(() => {
@@ -102,6 +118,34 @@ export function EditorContextMenu({
     onClose()
     if (!editor) return
 
+    if (item.action === 'copy' || item.action === 'cut') {
+      editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        const { state } = view
+        const { from, to } = state.selection
+        const text = state.doc.textBetween(from, to, '\n', ' ')
+        if (!text) return
+        window.api.copyText(text)
+        if (item.action === 'cut') {
+          view.dispatch(state.tr.deleteSelection().scrollIntoView())
+          view.focus()
+        }
+      })
+      return
+    }
+
+    if (item.action === 'paste') {
+      const text = window.api.readClipboardText()
+      if (!text) return
+      editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        const { state } = view
+        view.dispatch(state.tr.replaceSelectionWith(state.schema.text(text)).scrollIntoView())
+        view.focus()
+      })
+      return
+    }
+
     if (item.action === 'link') {
       const url = window.prompt(t('ctx.linkPrompt'), 'https://')
       if (url && url.trim()) {
@@ -141,7 +185,12 @@ export function EditorContextMenu({
         <div key={groupIndex}>
           {groupIndex > 0 && <div className="ctx-separator" />}
           {group.map((item) => (
-            <button key={item.action} className="ctx-item" onClick={() => handleClick(item)}>
+            <button
+              key={item.action}
+              className="ctx-item"
+              disabled={(item.action === 'copy' || item.action === 'cut') && !hasSelection}
+              onClick={() => handleClick(item)}
+            >
               <span className="ctx-label">{t(item.labelKey)}</span>
               {item.shortcut && <span className="ctx-shortcut">{item.shortcut}</span>}
             </button>

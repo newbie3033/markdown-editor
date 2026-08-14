@@ -13,6 +13,7 @@ import { upload, uploadConfig, type Uploader } from '@milkdown/kit/plugin/upload
 import { outline } from '@milkdown/kit/utils'
 import { prism } from '@milkdown/plugin-prism'
 import { codeBlockCopyPlugin } from '../lib/codeBlockCopy'
+import { createTyporaKeymap } from '../lib/typoraKeymap'
 import type { OutlineItem } from '../lib/markdown'
 import { filePathOf, isImageFileName, isMarkdownFileName } from '../lib/markdown'
 
@@ -132,7 +133,15 @@ function InnerEditor({
         .use(indent)
         .use(listener)
         .use(codeBlockCopyPlugin)
-        .use(prism),
+        .use(prism)
+        // Typora-style shortcuts (Ctrl+1..6 headings, Ctrl+K link, Ctrl+Shift+K
+        // code fence, Ctrl+T table, Ctrl+Shift+I image, Ctrl+\\ clear format, …).
+        .use(
+          createTyporaKeymap({
+            getDocPath: () => getDocPathRef.current(),
+            isReadOnly: () => isReadOnlyRef.current()
+          })
+        ),
     []
   )
 

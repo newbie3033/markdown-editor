@@ -1,5 +1,6 @@
 import type { Editor } from '@milkdown/kit/core'
 import { editorViewCtx, commandsCtx } from '@milkdown/kit/core'
+import type { Ctx } from '@milkdown/kit/ctx'
 import { callCommand } from '@milkdown/kit/utils'
 import {
   createCodeBlockCommand,
@@ -18,6 +19,9 @@ import {
 import { insertTableCommand, toggleStrikethroughCommand } from '@milkdown/kit/preset/gfm'
 
 export type ContextMenuAction =
+  | 'copy'
+  | 'cut'
+  | 'paste'
   | 'h1'
   | 'h2'
   | 'h3'
@@ -56,29 +60,37 @@ export function appendImage(editor: Editor, src: string): void {
   focusEditor(editor)
 }
 
-function applyLink(editor: Editor, href: string): void {
-  editor.action((ctx) => {
-    const view = ctx.get(editorViewCtx)
-    const { state } = view
-    const { from, to, empty } = state.selection
-    const linkType = state.schema.marks.link
-    if (!linkType) return
-    const linkMark = linkType.create({ href })
-    if (!empty) {
-      // Wrap the current selection in the link mark (toggling if already linked).
-      const hasLink = state.doc.rangeHasMark(from, to, linkType)
-      const tr = hasLink
-        ? state.tr.removeMark(from, to, linkMark)
-        : state.tr.addMark(from, to, linkMark)
-      view.dispatch(tr.scrollIntoView())
-      return
-    }
-    // Empty selection: insert the URL text and link it.
-    const tr = state.tr
-    tr.insertText(href, from)
-    tr.addMark(from, from + href.length, linkMark)
+/**
+ * Apply a link to the selection in the editor view of the given ctx
+ * (toggling if the selection is already linked, inserting the URL as text
+ * when the selection is empty). Shared by the context menu and the
+ * Typora-style Ctrl+K keymap.
+ */
+export function applyLinkToCtx(ctx: Ctx, href: string): void {
+  const view = ctx.get(editorViewCtx)
+  const { state } = view
+  const { from, to, empty } = state.selection
+  const linkType = state.schema.marks.link
+  if (!linkType) return
+  const linkMark = linkType.create({ href })
+  if (!empty) {
+    // Wrap the current selection in the link mark (toggling if already linked).
+    const hasLink = state.doc.rangeHasMark(from, to, linkType)
+    const tr = hasLink
+      ? state.tr.removeMark(from, to, linkMark)
+      : state.tr.addMark(from, to, linkMark)
     view.dispatch(tr.scrollIntoView())
-  })
+    return
+  }
+  // Empty selection: insert the URL text and link it.
+  const tr = state.tr
+  tr.insertText(href, from)
+  tr.addMark(from, from + href.length, linkMark)
+  view.dispatch(tr.scrollIntoView())
+}
+
+function applyLink(editor: Editor, href: string): void {
+  editor.action((ctx) => applyLinkToCtx(ctx, href))
   focusEditor(editor)
 }
 

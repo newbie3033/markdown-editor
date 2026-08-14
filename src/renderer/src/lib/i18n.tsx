@@ -24,6 +24,9 @@ const dict = {
     'status.toggleSidebar': 'Toggle file sidebar',
     'status.toggleOutline': 'Toggle outline',
     'editor.placeholder': 'Type here…',
+    'ctx.copy': 'Copy',
+    'ctx.cut': 'Cut',
+    'ctx.paste': 'Paste',
     'ctx.h1': 'Heading 1',
     'ctx.h2': 'Heading 2',
     'ctx.h3': 'Heading 3',
@@ -51,17 +54,21 @@ const dict = {
     'search.noResults': 'No results',
     'search.matches': '{n} matches',
     'search.nameBadge': 'name',
-    'search.mode.text': 'Text',
-    'search.mode.wildcard': 'Wildcard',
-    'search.mode.regex': 'Regex',
-    'search.mode.textTip': 'Literal text',
-    'search.mode.wildcardTip': '* matches any characters, ? matches one character',
-    'search.mode.regexTip': 'JavaScript regular expression (case-insensitive)',
+    'search.matchCase': 'Aa',
+    'search.matchCaseTip': 'Match Case',
+    'search.wholeWord': 'ab',
+    'search.wholeWordTip': 'Match Whole Word',
+    'search.regex': '.*',
+    'search.regexTip': 'Use Regular Expression',
     'find.placeholder': 'Find…',
     'find.noMatch': 'No matches',
     'find.next': 'Next (Enter)',
     'find.prev': 'Previous (Shift+Enter)',
     'find.close': 'Close (Esc)',
+    'find.replaceToggle': 'Replace (Ctrl+H)',
+    'find.replaceWith': 'Replace with…',
+    'find.replace': 'Replace',
+    'find.replaceAll': 'Replace all',
     'code.copy': 'Copy',
     'code.copied': 'Copied',
     'status.copyPath': 'Copy file path',
@@ -97,6 +104,9 @@ const dict = {
     'status.toggleSidebar': '切换文件侧边栏',
     'status.toggleOutline': '切换大纲栏',
     'editor.placeholder': '在这里开始输入…',
+    'ctx.copy': '复制',
+    'ctx.cut': '剪切',
+    'ctx.paste': '粘贴',
     'ctx.h1': '一级标题',
     'ctx.h2': '二级标题',
     'ctx.h3': '三级标题',
@@ -124,17 +134,21 @@ const dict = {
     'search.noResults': '无结果',
     'search.matches': '{n} 处匹配',
     'search.nameBadge': '文件名',
-    'search.mode.text': '文本',
-    'search.mode.wildcard': '通配符',
-    'search.mode.regex': '正则',
-    'search.mode.textTip': '字面文本',
-    'search.mode.wildcardTip': '* 匹配任意字符，? 匹配单个字符',
-    'search.mode.regexTip': 'JavaScript 正则表达式（不区分大小写）',
+    'search.matchCase': 'Aa',
+    'search.matchCaseTip': '区分大小写',
+    'search.wholeWord': 'ab',
+    'search.wholeWordTip': '全字匹配',
+    'search.regex': '.*',
+    'search.regexTip': '使用正则表达式',
     'find.placeholder': '查找…',
     'find.noMatch': '无匹配',
     'find.next': '下一个（Enter）',
     'find.prev': '上一个（Shift+Enter）',
     'find.close': '关闭（Esc）',
+    'find.replaceToggle': '替换（Ctrl+H）',
+    'find.replaceWith': '替换为…',
+    'find.replace': '替换',
+    'find.replaceAll': '全部替换',
     'code.copy': '复制',
     'code.copied': '已复制',
     'status.copyPath': '复制文件路径',
@@ -160,11 +174,11 @@ A **Typora-style** WYSIWYG Markdown editor.
 
 - Write Markdown and see it rendered *inline*, just like Typora
 - \`Ctrl+/\` toggles source code mode
-- \`Ctrl+Shift+1\` / \`Ctrl+Shift+2\` toggle the file and outline panels
+- \`Ctrl+Shift+1\` / \`Ctrl+Shift+2\` / \`Ctrl+Shift+3\` toggle the outline, articles and file tree panels (\`Ctrl+Shift+L\` toggles the sidebar)
 - Paste or drag an **image** to insert it next to your document
 - Drag a \`.md\` file anywhere into the window to open it
 - **Right-click** in the editor for quick formatting
-- \`Ctrl+F\` finds in the document, \`Ctrl+Shift+F\` searches the folder
+- \`Ctrl+F\` finds in the document, \`Ctrl+H\` finds and replaces, \`Ctrl+Shift+F\` searches the folder
 - **File → Export as PDF/HTML** to share your notes
 
 > Tip: open a folder with \`Ctrl+Shift+O\` to browse your notes.
@@ -185,11 +199,11 @@ const WELCOME_ZH = `# 欢迎使用 InkMark
 
 - 边写边渲染，和 Typora 一样所见即所得
 - \`Ctrl+/\` 切换源码模式
-- \`Ctrl+Shift+1\` / \`Ctrl+Shift+2\` 切换文件侧边栏和大纲
+- \`Ctrl+Shift+1\` / \`Ctrl+Shift+2\` / \`Ctrl+Shift+3\` 切换大纲、文章与文件树（\`Ctrl+Shift+L\` 切换侧边栏）
 - 粘贴或拖入**图片**即可插入到文档旁边
 - 将 \`.md\` 文件拖入窗口任意位置即可打开
 - 在编辑器中**右键**可快捷插入格式
-- \`Ctrl+F\` 文档内查找，\`Ctrl+Shift+F\` 文件夹关键词搜索
+- \`Ctrl+F\` 文档内查找，\`Ctrl+H\` 查找并替换，\`Ctrl+Shift+F\` 文件夹关键词搜索
 - **文件 → 导出为 PDF/HTML** 分享你的笔记
 
 > 提示：按 \`Ctrl+Shift+O\` 打开文件夹浏览笔记。

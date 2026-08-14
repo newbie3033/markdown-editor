@@ -13,7 +13,7 @@ import {
   type PickImageResult,
   type FileSearchResult,
   type SaveChoice,
-  type SearchMode
+  type SearchFlags
 } from '../shared/ipc'
 
 const api: InkMarkApi = {
@@ -45,8 +45,8 @@ const api: InkMarkApi = {
 
   pickImage: (): Promise<PickImageResult> => ipcRenderer.invoke(IPC.pickImage),
 
-  searchFiles: (folderPath: string, query: string, mode?: SearchMode): Promise<FileSearchResult[]> =>
-    ipcRenderer.invoke(IPC.searchFiles, folderPath, query, mode),
+  searchFiles: (folderPath: string, query: string, flags?: SearchFlags): Promise<FileSearchResult[]> =>
+    ipcRenderer.invoke(IPC.searchFiles, folderPath, query, flags),
 
   confirmSave: (fileName: string): Promise<SaveChoice> => ipcRenderer.invoke(IPC.confirmSave, fileName),
 
@@ -76,6 +76,14 @@ const api: InkMarkApi = {
 
   copyText: (text: string): void => {
     clipboard.writeText(text)
+  },
+
+  readClipboardText: (): string => {
+    try {
+      return clipboard.readText()
+    } catch {
+      return ''
+    }
   },
 
   getLocale: (): Promise<Lang> => ipcRenderer.invoke(IPC.getLocale),

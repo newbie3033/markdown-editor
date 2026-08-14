@@ -85,21 +85,32 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
         { role: 'paste', label: t('menu.paste') },
         { role: 'selectAll', label: t('menu.selectAll') },
         { type: 'separator' },
-        { label: t('menu.find'), accelerator: 'CmdOrCtrl+F', click: (_i, w) => send('find', w ?? getWindowRef()) }
+        { label: t('menu.find'), accelerator: 'CmdOrCtrl+F', click: (_i, w) => send('find', w ?? getWindowRef()) },
+        { label: t('menu.replace'), accelerator: 'CmdOrCtrl+H', click: (_i, w) => send('replace', w ?? getWindowRef()) }
       ]
     },
     {
       label: t('menu.view'),
       submenu: [
         {
-          label: t('menu.toggleSidebar'),
+          label: t('menu.toggleOutline'),
           accelerator: 'CmdOrCtrl+Shift+1',
-          click: (_i, w) => send('toggle-sidebar', w ?? getWindowRef())
+          click: (_i, w) => send('toggle-outline', w ?? getWindowRef())
         },
         {
-          label: t('menu.toggleOutline'),
+          label: t('menu.toggleArticles'),
           accelerator: 'CmdOrCtrl+Shift+2',
-          click: (_i, w) => send('toggle-outline', w ?? getWindowRef())
+          click: (_i, w) => send('toggle-articles', w ?? getWindowRef())
+        },
+        {
+          label: t('menu.toggleFileTree'),
+          accelerator: 'CmdOrCtrl+Shift+3',
+          click: (_i, w) => send('toggle-file-tree', w ?? getWindowRef())
+        },
+        {
+          label: t('menu.toggleSidebar'),
+          accelerator: 'CmdOrCtrl+Shift+L',
+          click: (_i, w) => send('toggle-sidebar', w ?? getWindowRef())
         },
         {
           label: t('menu.toggleSource'),
@@ -140,17 +151,17 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
         { type: 'separator' },
         {
           label: t('menu.actualSize'),
-          accelerator: 'CmdOrCtrl+0',
+          accelerator: 'CmdOrCtrl+Shift+0',
           click: (_i, w) => send('zoom-reset', w ?? getWindowRef())
         },
         {
           label: t('menu.zoomIn'),
-          accelerator: 'CmdOrCtrl+=',
+          accelerator: 'CmdOrCtrl+Shift+=',
           click: (_i, w) => send('zoom-in', w ?? getWindowRef())
         },
         {
           label: t('menu.zoomOut'),
-          accelerator: 'CmdOrCtrl+-',
+          accelerator: 'CmdOrCtrl+Shift+-',
           click: (_i, w) => send('zoom-out', w ?? getWindowRef())
         },
         { type: 'separator' },
@@ -159,7 +170,9 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
           ? []
           : ([
               { type: 'separator' as const },
-              { role: 'toggleDevTools' as const, label: t('menu.toggleDevTools') }
+              // Explicit accelerator: keep the default Ctrl+Shift+I free for
+              // the Typora-style "insert image" shortcut.
+              { role: 'toggleDevTools' as const, accelerator: 'F12', label: t('menu.toggleDevTools') }
             ] satisfies MenuItemConstructorOptions[]))
       ]
     },

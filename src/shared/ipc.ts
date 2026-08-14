@@ -65,30 +65,36 @@ export interface FileSearchResult {
   matches: SearchMatch[]
 }
 
-export type SearchMode = 'text' | 'wildcard' | 'regex'
+/** VS Code-style search options. All default to false. */
+export interface SearchFlags {
+  /** Match character case exactly (default: case-insensitive). */
+  caseSensitive?: boolean
+  /** Match whole words only (default: match substrings). */
+  wholeWord?: boolean
+  /** Treat the query as a regular expression (default: literal text). */
+  regex?: boolean
+}
 
 /**
- * Compile a search query into a case-insensitive RegExp.
- * - text: literal text (regex special characters escaped)
- * - wildcard: `*` matches any characters, `?` matches a single character
- * - regex: raw JavaScript regular expression (`g` + `i` + `m` flags)
+ * Compile a search query into a RegExp, VS Code style.
+ * - literal mode (regex=false): special characters are escaped
+ * - regex mode (regex=true): the query is used as a raw pattern
+ * - caseSensitive=false adds the `i` flag
+ * - wholeWord=true wraps the pattern in Unicode-aware word-boundary
+ *   lookarounds (letters, digits and underscores count as word characters)
  * Returns null for empty queries or invalid regexes.
  */
-export function compileSearchRegex(query: string, mode: SearchMode): RegExp | null {
+export function compileSearchRegex(query: string, flags: SearchFlags = {}): RegExp | null {
   const q = query.trim()
   if (!q) return null
   try {
-    if (mode === 'regex') {
-      return new RegExp(q, 'gim')
+    let pattern = flags.regex ? q : q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    if (flags.wholeWord) {
+      pattern = `(?<![\\p{L}\\p{N}_])(?:${pattern})(?![\\p{L}\\p{N}_])`
     }
-    if (mode === 'wildcard') {
-      const escaped = q
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*/g, '.*')
-        .replace(/\?/g, '.')
-      return new RegExp(escaped, 'gi')
-    }
-    return new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+    const parts = ['g', 'm', 'u']
+    if (!flags.caseSensitive) parts.push('i')
+    return new RegExp(pattern, parts.join(''))
   } catch {
     return null
   }
@@ -106,9 +112,12 @@ export type MenuAction =
   | 'export-pdf'
   | 'print'
   | 'find'
+  | 'replace'
   | 'search-folder'
   | 'toggle-source'
   | 'toggle-sidebar'
+  | 'toggle-articles'
+  | 'toggle-file-tree'
   | 'toggle-outline'
   | 'theme-light'
   | 'theme-dark'
@@ -173,7 +182,7 @@ export interface InkMarkApi {
   exportPrint(html: string): Promise<void>
   saveImage(payload: SaveImagePayload): Promise<SaveImageResult | null>
   pickImage(): Promise<PickImageResult>
-  searchFiles(folderPath: string, query: string, mode?: SearchMode): Promise<FileSearchResult[]>
+  searchFiles(folderPath: string, query: string, flags?: SearchFlags): Promise<FileSearchResult[]>
   confirmSave(fileName: string): Promise<SaveChoice>
   openExternal(url: string): Promise<void>
   openLocalPath(path: string): Promise<string>
@@ -185,6 +194,7 @@ export interface InkMarkApi {
   showAbout(): Promise<void>
   setReadOnly(value: boolean): Promise<void>
   copyText(text: string): void
+  readClipboardText(): string
   getLocale(): Promise<Lang>
   setLocale(lang: Lang): Promise<void>
   onMenuAction(callback: (action: MenuAction) => void): () => void

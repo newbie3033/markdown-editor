@@ -41,3 +41,6 @@ $RECYCLE.BIN/
 *.suo
 *.swp
 *~
+
+# Headless self-test user data
+.tmp-selftest

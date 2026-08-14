@@ -21,20 +21,22 @@ engine), packaged for Windows, macOS, and Linux with **electron-builder**.
 - **Documents: drag to open** — drop a `.md`/`.markdown`/`.txt` file anywhere in
   the window (or into the editor) to open it; drop a **folder** to open it in
   the sidebar. Paths are resolved via Electron's `webUtils.getPathForFile`.
-- **Right-click context menu** — insert headings, bold/italic/strikethrough,
-  inline code, links, images, quotes, code blocks, bullet/ordered/task lists,
-  tables, and horizontal rules with one click.
+- **Right-click context menu** — **Copy / Cut / Paste** (disabled when there
+  is no selection), plus insert headings, bold/italic/strikethrough, inline
+  code, links, images, quotes, code blocks, bullet/ordered/task lists, tables,
+  and horizontal rules with one click.
 - **Keyword search** — `Ctrl+Shift+F` searches file names and content across
   all open folders (click a result to open the file and jump to the match);
-  `Ctrl+F` opens an in-document find bar with next/previous navigation. Both
-  searches support three modes: **Text** (literal), **Wildcard** (`*` any
-  characters, `?` one character) and **Regex** (JavaScript regular expressions,
-  case-insensitive, multiline).
+  `Ctrl+F` opens an in-document find bar with next/previous navigation and
+  `Ctrl+H` adds **find & replace** (replace one or all, F3/Shift+F3 to jump).
+  Both searches offer **VS Code-style options**: match case (**Aa**), match
+  whole word (**ab**, Unicode-aware) and regular expression (**.***) toggles.
 - **Multiple folders + Open Files** — open several folders side by side in the
   sidebar (each closeable independently); individually opened files are listed
-  under *Open Files* and can be closed (removed) at any time. Closing a file
-  with unsaved changes prompts **Save / Don't Save / Cancel** in a native
-  dialog.
+  under *Open Files* and can be closed (removed) at any time. Newly saved
+  documents appear in the sidebar automatically — under *Open Files*, or in
+  the folder tree when saved into an open folder. Closing a file with unsaved
+  changes prompts **Save / Don't Save / Cancel** in a native dialog.
 - **Smart hyperlinks** — clicking an `http(s)://` link opens it in the system
   browser; clicking a local link (relative to the document) opens the target
   file directly in InkMark (or with the system default app for other types);
@@ -42,8 +44,8 @@ engine), packaged for Windows, macOS, and Linux with **electron-builder**.
 - **File explorer sidebar** — open a folder and browse all `.md` files
   (`Ctrl+Shift+O`). The file and outline sidebars are **drag-resizable**
   (double-click the edge to reset) and can be toggled with the 📁 / ☰ icons in
-  the status bar (or `Ctrl+Shift+1` / `Ctrl+Shift+2`); widths persist across
-  sessions.
+  the status bar (or `Ctrl+Shift+1` / `Ctrl+Shift+2`); widths and open/closed
+  state persist across sessions.
 - **Outline sidebar** — a live table of contents that scrolls to headings.
 - **Edit / Read-only modes** — toggle via the ✏️/🔒 status bar button or
   *View → Read-only Mode*: read-only disables editing (typing, context-menu
@@ -216,19 +218,43 @@ by the main process. Put the exe on a USB stick and settings travel with it.
 
 ## Keyboard shortcuts
 
-| Action                  | Shortcut              |
-| ----------------------- | --------------------- |
-| New / Open / Save       | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` |
-| Save As                 | `Ctrl+Shift+S`        |
-| Open Folder             | `Ctrl+Shift+O`        |
-| Find in document        | `Ctrl+F`              |
-| Search in folder        | `Ctrl+Shift+F`        |
-| Source code mode        | `Ctrl+/`              |
-| Toggle file sidebar     | `Ctrl+Shift+1`        |
-| Toggle outline          | `Ctrl+Shift+2`        |
-| Bold / Italic           | `Ctrl+B` / `Ctrl+I`   |
-| Zoom in / out / reset   | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` |
-| Undo / Redo             | `Ctrl+Z` / `Ctrl+Shift+Z` |
+Typora-compatible shortcut layout (macOS uses Cmd/Option equivalents).
+
+### File & view
+
+| Action                        | Shortcut              |
+| ----------------------------- | --------------------- |
+| New / Open / Save             | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` |
+| Save As                       | `Ctrl+Shift+S`        |
+| Open Folder                   | `Ctrl+Shift+O`        |
+| Find in document              | `Ctrl+F`              |
+| Find & replace                | `Ctrl+H`              |
+| Search in folder              | `Ctrl+Shift+F`        |
+| Source code mode              | `Ctrl+/`              |
+| Toggle outline                | `Ctrl+Shift+1`        |
+| Articles (file list)          | `Ctrl+Shift+2`        |
+| File tree                     | `Ctrl+Shift+3`        |
+| Toggle sidebar                | `Ctrl+Shift+L`        |
+| Zoom in / out / actual size   | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Shift+0` |
+| Fullscreen / DevTools         | `F11` / `F12`          |
+
+### Editing
+
+| Action                        | Shortcut              |
+| ----------------------------- | --------------------- |
+| Headings 1-6                  | `Ctrl+1` … `Ctrl+6`   |
+| Paragraph                     | `Ctrl+0`              |
+| Increase / decrease heading   | `Ctrl+=` / `Ctrl+-`   |
+| Bold / Italic                 | `Ctrl+B` / `Ctrl+I`   |
+| Strikethrough / inline code   | `Alt+Shift+5` / `Ctrl+Shift+`` |
+| Hyperlink / image             | `Ctrl+K` / `Ctrl+Shift+I` |
+| Blockquote / code fence       | `Ctrl+Shift+Q` / `Ctrl+Shift+K` |
+| Ordered / unordered list      | `Ctrl+Shift+[` / `Ctrl+Shift+]` |
+| Table / clear format          | `Ctrl+T` / `Ctrl+\\`   |
+| Undo / Redo                   | `Ctrl+Z` / `Ctrl+Shift+Z` |
+
+The Milkdown defaults (e.g. `Ctrl+E` inline code, `Ctrl+Alt+1..6` headings)
+remain available as alternative bindings.
 
 ## License
 

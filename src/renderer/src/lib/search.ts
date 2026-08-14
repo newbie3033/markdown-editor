@@ -1,7 +1,7 @@
 import type { Editor } from '@milkdown/kit/core'
 import { editorStateCtx, editorViewCtx } from '@milkdown/kit/core'
 import { TextSelection } from '@milkdown/prose/state'
-import { compileSearchRegex, type SearchMode } from '../../../shared/ipc'
+import { compileSearchRegex, type SearchFlags } from '../../../shared/ipc'
 
 export interface TextMatch {
   from: number
@@ -9,11 +9,11 @@ export interface TextMatch {
 }
 
 /**
- * Find all case-insensitive occurrences of `query` in the editor document.
- * Supports plain text, wildcard (`*`/`?`) and regex modes.
+ * Find all occurrences of `query` in the editor document, VS Code style
+ * (case-sensitive / whole-word / regex options via `flags`).
  */
-export function findTextMatches(editor: Editor, query: string, mode: SearchMode = 'text'): TextMatch[] {
-  const regex = compileSearchRegex(query, mode)
+export function findTextMatches(editor: Editor, query: string, flags: SearchFlags = {}): TextMatch[] {
+  const regex = compileSearchRegex(query, flags)
   if (!regex) return []
   const matches: TextMatch[] = []
   editor.action((ctx) => {
@@ -22,7 +22,7 @@ export function findTextMatches(editor: Editor, query: string, mode: SearchMode 
       if (!node.isText) return
       const text = node.text ?? ''
       if (!text) return
-      const re = compileSearchRegex(query, mode)
+      const re = compileSearchRegex(query, flags)
       if (!re) return
       let execResult: RegExpExecArray | null
       while ((execResult = re.exec(text)) !== null) {
@@ -47,8 +47,8 @@ export function selectMatch(editor: Editor, match: TextMatch, focus = true): voi
 }
 
 /** Find all occurrences in a plain string (source mode). */
-export function findInString(text: string, query: string, mode: SearchMode = 'text'): TextMatch[] {
-  const regex = compileSearchRegex(query, mode)
+export function findInString(text: string, query: string, flags: SearchFlags = {}): TextMatch[] {
+  const regex = compileSearchRegex(query, flags)
   if (!regex) return []
   const matches: TextMatch[] = []
   let execResult: RegExpExecArray | null
@@ -57,4 +57,53 @@ export function findInString(text: string, query: string, mode: SearchMode = 'te
     if (execResult[0].length === 0) regex.lastIndex += 1
   }
   return matches
+}
+
+/** Replace a single match inside the editor (positions are ProseMirror positions). */
+export function replaceMatchInEditor(editor: Editor, match: TextMatch, replacement: string): void {
+  editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx)
+    const { state } = view
+    const tr = state.tr.replaceWith(match.from, match.to, state.schema.text(replacement))
+    view.dispatch(tr.scrollIntoView())
+  })
+}
+
+/** Replace all matches inside the editor with a single transaction. */
+export function replaceAllMatchesInEditor(
+  editor: Editor,
+  matches: TextMatch[],
+  replacement: string
+): void {
+  if (matches.length === 0) return
+  editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx)
+    const { state } = view
+    let tr = state.tr
+    const text = state.schema.text(replacement)
+    // Replace from the end so earlier positions stay valid.
+    for (let i = matches.length - 1; i >= 0; i -= 1) {
+      tr = tr.replaceWith(matches[i].from, matches[i].to, text)
+    }
+    view.dispatch(tr.scrollIntoView())
+  })
+}
+
+/** Replace a single match in a plain string (source mode). */
+export function replaceRangeInString(text: string, match: TextMatch, replacement: string): string {
+  return text.slice(0, match.from) + replacement + text.slice(match.to)
+}
+
+/** Replace all matches in a plain string (source mode). */
+export function replaceAllInString(
+  text: string,
+  matches: TextMatch[],
+  replacement: string
+): string {
+  let out = text
+  // Replace from the end so earlier offsets stay valid.
+  for (let i = matches.length - 1; i >= 0; i -= 1) {
+    out = out.slice(0, matches[i].from) + replacement + out.slice(matches[i].to)
+  }
+  return out
 }

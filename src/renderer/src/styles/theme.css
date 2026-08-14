@@ -456,6 +456,14 @@ body.resizing {
   font-weight: 600;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
+/* VS Code-style "whole word" glyph: "ab" between word-boundary bars. */
+.mode-btn.ww {
+  border-left: 1px solid currentColor;
+  border-right: 1px solid currentColor;
+  border-radius: 0;
+  padding-left: 3px;
+  padding-right: 3px;
+}
 
 .search-input {
   width: 100%;
@@ -566,13 +574,28 @@ body.resizing {
   right: 16px;
   z-index: 900;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 6px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
   padding: 5px 6px;
+}
+
+.findbar-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.findbar-replace {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-top: 1px dashed var(--border);
+  padding-top: 5px;
 }
 
 .findbar input {
@@ -615,6 +638,25 @@ body.resizing {
 .find-btn:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+.find-btn.replace-toggle.active {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.replace-btn {
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  color: #fff;
+  background: var(--accent);
+}
+.replace-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+.replace-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* ==========================================================================
@@ -974,6 +1016,13 @@ li.ProseMirror-selectednode::after {
 }
 .ctx-item:hover {
   background: var(--bg-hover);
+}
+.ctx-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.ctx-item:disabled:hover {
+  background: none;
 }
 
 .ctx-shortcut {

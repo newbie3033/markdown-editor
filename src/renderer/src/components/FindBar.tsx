@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Editor } from '@milkdown/kit/core'
-import type { SearchMode } from '../../../shared/ipc'
+import type { SearchFlags } from '../../../shared/ipc'
 import { useI18n } from '../lib/i18n'
-import { findInString, findTextMatches, selectMatch } from '../lib/search'
-import { SearchModeToggle } from './SearchModeToggle'
+import {
+  findInString,
+  findTextMatches,
+  replaceAllInString,
+  replaceAllMatchesInEditor,
+  replaceMatchInEditor,
+  replaceRangeInString,
+  selectMatch
+} from '../lib/search'
+import { SearchFlagsToggle } from './SearchFlagsToggle'
 
 interface FindBarProps {
   getEditor: () => Editor | null
@@ -11,6 +19,11 @@ interface FindBarProps {
   sourceText: string
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
   onClose: () => void
+  /** Whether the replace row is visible (opened via Ctrl+H). */
+  replaceOpen: boolean
+  onToggleReplace: () => void
+  /** Applies replaced text in source mode (updates the document state). */
+  onSourceReplace: (text: string) => void
 }
 
 export function FindBar({
@@ -18,25 +31,37 @@ export function FindBar({
   sourceMode,
   sourceText,
   textareaRef,
-  onClose
+  onClose,
+  replaceOpen,
+  onToggleReplace,
+  onSourceReplace
 }: FindBarProps): React.JSX.Element {
   const { t } = useI18n()
   const [query, setQuery] = useState('')
-  const [mode, setMode] = useState<SearchMode>('text')
+  const [flags, setFlags] = useState<SearchFlags>({})
+  const [replacement, setReplacement] = useState('')
   const [current, setCurrent] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const replaceInputRef = useRef<HTMLInputElement>(null)
+  const currentRef = useRef(0)
+  currentRef.current = current
 
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
 
+  // Focus the replace input when the replace row opens (Ctrl+H).
+  useEffect(() => {
+    if (replaceOpen) replaceInputRef.current?.focus()
+  }, [replaceOpen])
+
   const matches = useMemo(() => {
     if (!query.trim()) return []
-    if (sourceMode) return findInString(sourceText, query, mode)
+    if (sourceMode) return findInString(sourceText, query, flags)
     const editor = getEditor()
-    return editor ? findTextMatches(editor, query, mode) : []
+    return editor ? findTextMatches(editor, query, flags) : []
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, mode, sourceMode, sourceText, getEditor])
+  }, [query, flags, sourceMode, sourceText, getEditor])
 
   const selectAt = (index: number, focus: boolean): void => {
     if (matches.length === 0) return
@@ -58,12 +83,54 @@ export function FindBar({
     }
   }
 
+  const selectAtRef = useRef(selectAt)
+  selectAtRef.current = selectAt
+
+  // F3 / Shift+F3: find next / previous while the find bar is open.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'F3') {
+        event.preventDefault()
+        selectAtRef.current(currentRef.current + (event.shiftKey ? -1 : 1), true)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
   // Auto-select the first match while typing (without stealing focus).
   useEffect(() => {
     setCurrent(0)
     if (matches.length > 0) selectAt(0, false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, mode, sourceMode, sourceText])
+  }, [query, flags, sourceMode, sourceText])
+
+  const replaceCurrent = (): void => {
+    if (!query.trim() || matches.length === 0) return
+    const match = matches[((current % matches.length) + matches.length) % matches.length]
+    if (sourceMode) {
+      const next = replaceRangeInString(sourceText, match, replacement)
+      onSourceReplace(next)
+      const textarea = textareaRef.current
+      if (textarea) {
+        textarea.focus()
+        textarea.setSelectionRange(match.from + replacement.length, match.from + replacement.length)
+      }
+    } else {
+      const editor = getEditor()
+      if (editor) replaceMatchInEditor(editor, match, replacement)
+    }
+  }
+
+  const replaceAll = (): void => {
+    if (!query.trim() || matches.length === 0) return
+    if (sourceMode) {
+      onSourceReplace(replaceAllInString(sourceText, matches, replacement))
+    } else {
+      const editor = getEditor()
+      if (editor) replaceAllMatchesInEditor(editor, matches, replacement)
+    }
+  }
 
   const handleKeyDown = (event: React.KeyboardEvent): void => {
     if (event.key === 'Enter') {
@@ -75,6 +142,13 @@ export function FindBar({
     }
   }
 
+  const handleReplaceKeyDown = (event: React.KeyboardEvent): void => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      replaceCurrent()
+    }
+  }
+
   const countLabel = query.trim()
     ? matches.length === 0
       ? t('find.noMatch')
@@ -83,26 +157,67 @@ export function FindBar({
 
   return (
     <div className="findbar">
-      <input
-        ref={inputRef}
-        type="text"
-        value={query}
-        placeholder={t('find.placeholder')}
-        onChange={(event) => setQuery(event.target.value)}
-        onKeyDown={handleKeyDown}
-        spellCheck={false}
-      />
-      <SearchModeToggle mode={mode} onChange={setMode} />
-      <span className="find-count">{countLabel}</span>
-      <button className="find-btn" onClick={() => selectAt(current - 1, true)} title={t('find.prev')}>
-        ▲
-      </button>
-      <button className="find-btn" onClick={() => selectAt(current + 1, true)} title={t('find.next')}>
-        ▼
-      </button>
-      <button className="find-btn" onClick={onClose} title={t('find.close')}>
-        ✕
-      </button>
+      <div className="findbar-main">
+        <input
+          ref={inputRef}
+          type="text"
+          value={query}
+          placeholder={t('find.placeholder')}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={handleKeyDown}
+          spellCheck={false}
+        />
+        <SearchFlagsToggle
+          flags={flags}
+          onToggle={(key) => setFlags((prev) => ({ ...prev, [key]: !prev[key] }))}
+        />
+        <button
+          className={'find-btn replace-toggle' + (replaceOpen ? ' active' : '')}
+          onClick={onToggleReplace}
+          title={t('find.replaceToggle')}
+        >
+          ⇄
+        </button>
+        <span className="find-count">{countLabel}</span>
+        <button className="find-btn" onClick={() => selectAt(current - 1, true)} title={t('find.prev')}>
+          ▲
+        </button>
+        <button className="find-btn" onClick={() => selectAt(current + 1, true)} title={t('find.next')}>
+          ▼
+        </button>
+        <button className="find-btn" onClick={onClose} title={t('find.close')}>
+          ✕
+        </button>
+      </div>
+      {replaceOpen && (
+        <div className="findbar-replace">
+          <input
+            ref={replaceInputRef}
+            type="text"
+            value={replacement}
+            placeholder={t('find.replaceWith')}
+            onChange={(event) => setReplacement(event.target.value)}
+            onKeyDown={handleReplaceKeyDown}
+            spellCheck={false}
+          />
+          <button
+            className="replace-btn"
+            onClick={replaceCurrent}
+            disabled={matches.length === 0}
+            title={t('find.replace')}
+          >
+            {t('find.replace')}
+          </button>
+          <button
+            className="replace-btn"
+            onClick={replaceAll}
+            disabled={matches.length === 0}
+            title={t('find.replaceAll')}
+          >
+            {t('find.replaceAll')}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

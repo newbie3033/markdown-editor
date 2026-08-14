@@ -1,4 +1,4 @@
-import type { FileEntry, SearchMode } from '../../../shared/ipc'
+import type { FileEntry, SearchFlags } from '../../../shared/ipc'
 import { useI18n } from '../lib/i18n'
 import { fileNameFromPath } from '../lib/markdown'
 import { FileTree } from './FileTree'
@@ -24,7 +24,7 @@ interface SidebarProps {
   onOpenFolder: () => void
   onCloseFolder: (path: string) => void
   onCloseFile: (path: string) => void
-  onOpenSearchResult: (path: string, matchIndex: number, query: string, mode: SearchMode) => void
+  onOpenSearchResult: (path: string, matchIndex: number, query: string, flags: SearchFlags) => void
 }
 
 export function Sidebar(props: SidebarProps): React.JSX.Element {

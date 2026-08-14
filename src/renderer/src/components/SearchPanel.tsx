@@ -1,17 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FileSearchResult, SearchMode } from '../../../shared/ipc'
+import type { FileSearchResult, SearchFlags } from '../../../shared/ipc'
 import { useI18n } from '../lib/i18n'
-import { SearchModeToggle } from './SearchModeToggle'
+import { SearchFlagsToggle } from './SearchFlagsToggle'
 
 interface SearchPanelProps {
   folderPaths: string[]
-  onOpenResult: (path: string, matchIndex: number, query: string, mode: SearchMode) => void
+  onOpenResult: (path: string, matchIndex: number, query: string, flags: SearchFlags) => void
 }
 
 export function SearchPanel({ folderPaths, onOpenResult }: SearchPanelProps): React.JSX.Element {
   const { t } = useI18n()
   const [query, setQuery] = useState('')
-  const [mode, setMode] = useState<SearchMode>('text')
+  const [flags, setFlags] = useState<SearchFlags>({})
   const [results, setResults] = useState<FileSearchResult[]>([])
   const [searching, setSearching] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -25,7 +25,7 @@ export function SearchPanel({ folderPaths, onOpenResult }: SearchPanelProps): Re
     }
     setSearching(true)
     const timer = setTimeout(() => {
-      void Promise.all(folderPaths.map((folder) => window.api.searchFiles(folder, q, mode)))
+      void Promise.all(folderPaths.map((folder) => window.api.searchFiles(folder, q, flags)))
         .then((perFolder) =>
           perFolder
             .flat()
@@ -35,7 +35,7 @@ export function SearchPanel({ folderPaths, onOpenResult }: SearchPanelProps): Re
         .finally(() => setSearching(false))
     }, 300)
     return () => clearTimeout(timer)
-  }, [query, mode, folderPaths])
+  }, [query, flags, folderPaths])
 
   const trimmed = query.trim()
 
@@ -52,7 +52,10 @@ export function SearchPanel({ folderPaths, onOpenResult }: SearchPanelProps): Re
           autoFocus
           spellCheck={false}
         />
-        <SearchModeToggle mode={mode} onChange={setMode} />
+        <SearchFlagsToggle
+          flags={flags}
+          onToggle={(key) => setFlags((prev) => ({ ...prev, [key]: !prev[key] }))}
+        />
       </div>
       <div className="sidebar-scroll">
         {folderPaths.length === 0 ? (
@@ -71,7 +74,7 @@ export function SearchPanel({ folderPaths, onOpenResult }: SearchPanelProps): Re
                   className="search-file-header"
                   title={result.path}
                   onClick={() =>
-                    onOpenResult(result.path, result.matches[0]?.globalIndex ?? -1, trimmed, mode)
+                    onOpenResult(result.path, result.matches[0]?.globalIndex ?? -1, trimmed, flags)
                   }
                 >
                   <span className="tree-icon">📄</span>
@@ -83,7 +86,7 @@ export function SearchPanel({ folderPaths, onOpenResult }: SearchPanelProps): Re
                   <button
                     key={`${match.globalIndex}-${match.line}`}
                     className="search-hit"
-                    onClick={() => onOpenResult(result.path, match.globalIndex, trimmed, mode)}
+                    onClick={() => onOpenResult(result.path, match.globalIndex, trimmed, flags)}
                   >
                     <span className="search-line">{match.line}</span>
                     <span className="search-text">{match.text}</span>
