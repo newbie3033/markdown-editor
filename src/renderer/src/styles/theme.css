@@ -1,66 +1,100 @@
 /* ==========================================================================
    InkMark — Typora-style theme (light / dark)
+   --------------------------------------------------------------------------
+   Visual language: frosted translucent surfaces, hairline borders, a flat
+   canvas, SF-style typography and the iOS blue accent. Every class name and the whole layout structure are
+   unchanged — this file only restyles appearance.
    ========================================================================== */
 
 :root {
-  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
-    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
-  --font-content: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
-    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas,
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Segoe UI", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", Arial, sans-serif;
+  --font-content: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Segoe UI", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", Arial, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     "Liberation Mono", "Courier New", monospace;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
 }
 
 :root[data-theme='light'] {
   color-scheme: light;
-  --bg: #ffffff;
-  --bg-secondary: #f6f8fa;
-  --bg-tertiary: #eff2f5;
-  --bg-hover: #f3f4f6;
-  --text: #24292f;
-  --text-secondary: #57606a;
-  --text-muted: #8b949e;
-  --border: #d0d7de;
-  --border-soft: #eaeef2;
-  --accent: #0969da;
-  --accent-hover: #0550ae;
-  --code-bg: #f6f8fa;
-  --code-text: #24292f;
-  --blockquote-border: #d0d7de;
-  --blockquote-text: #57606a;
-  --heading: #1f2328;
-  --inline-code-border: rgba(175, 184, 193, 0.35);
-  --scrollbar: #c1c7cd;
-  --scrollbar-hover: #a8aeb4;
-  --selection: #b3d4fc;
+  --bg: #f2f2f7;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: rgba(120, 120, 128, 0.09);
+  --bg-hover: rgba(120, 120, 128, 0.13);
+  --text: #1d1d1f;
+  --text-secondary: #6e6e73;
+  --text-muted: #98989d;
+  --border: rgba(60, 60, 67, 0.22);
+  --border-soft: rgba(60, 60, 67, 0.12);
+  --accent: #007aff;
+  --accent-hover: #0063d1;
+  --code-bg: rgba(120, 120, 128, 0.09);
+  --code-text: #1d1d1f;
+  --blockquote-border: #d1d1d6;
+  --blockquote-text: #6e6e73;
+  --heading: #000000;
+  --inline-code-border: rgba(60, 60, 67, 0.16);
+  --scrollbar: rgba(60, 60, 67, 0.3);
+  --scrollbar-hover: rgba(60, 60, 67, 0.5);
+  --selection: rgba(0, 122, 255, 0.22);
   --check-bg: #ffffff;
-  --table-header-bg: #f6f8fa;
+  --table-header-bg: rgba(120, 120, 128, 0.08);
+
+  /* Liquid-glass surfaces */
+  --glass-bg: rgba(255, 255, 255, 0.58);
+  --glass-bg-strong: rgba(255, 255, 255, 0.82);
+  --glass-bg-soft: rgba(255, 255, 255, 0.4);
+  --glass-border: rgba(255, 255, 255, 0.72);
+  --glass-hairline: rgba(60, 60, 67, 0.13);
+  --glass-shadow: 0 8px 24px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04);
+  --glass-shadow-pop: 0 18px 44px rgba(0, 0, 0, 0.16), 0 4px 12px rgba(0, 0, 0, 0.06);
+  --thumb-bg: #ffffff;
+  --thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --track-bg: rgba(120, 120, 128, 0.08);
 }
 
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --bg: #0d1117;
-  --bg-secondary: #161b22;
-  --bg-tertiary: #21262d;
-  --bg-hover: #1c2128;
-  --text: #c9d1d9;
-  --text-secondary: #8b949e;
-  --text-muted: #6e7681;
-  --border: #30363d;
-  --border-soft: #21262d;
-  --accent: #58a6ff;
-  --accent-hover: #79c0ff;
-  --code-bg: #161b22;
-  --code-text: #c9d1d9;
-  --blockquote-border: #3b434b;
-  --blockquote-text: #8b949e;
-  --heading: #f0f6fc;
-  --inline-code-border: rgba(110, 118, 129, 0.45);
-  --scrollbar: #30363d;
-  --scrollbar-hover: #3f464e;
-  --selection: #264f78;
-  --check-bg: #0d1117;
-  --table-header-bg: #161b22;
+  --bg: #000000;
+  --bg-secondary: #1c1c1e;
+  --bg-tertiary: rgba(120, 120, 128, 0.24);
+  --bg-hover: rgba(120, 120, 128, 0.3);
+  --text: #f5f5f7;
+  --text-secondary: rgba(235, 235, 245, 0.64);
+  --text-muted: rgba(235, 235, 245, 0.42);
+  --border: rgba(84, 84, 88, 0.58);
+  --border-soft: rgba(84, 84, 88, 0.36);
+  --accent: #0a84ff;
+  --accent-hover: #409cff;
+  --code-bg: rgba(28, 28, 30, 0.85);
+  --code-text: #f5f5f7;
+  --blockquote-border: #48484a;
+  --blockquote-text: rgba(235, 235, 245, 0.64);
+  --heading: #ffffff;
+  --inline-code-border: rgba(84, 84, 88, 0.5);
+  --scrollbar: rgba(120, 120, 128, 0.45);
+  --scrollbar-hover: rgba(120, 120, 128, 0.7);
+  --selection: rgba(10, 132, 255, 0.35);
+  --check-bg: #000000;
+  --table-header-bg: rgba(84, 84, 88, 0.22);
+
+  --glass-bg: rgba(24, 24, 27, 0.62);
+  --glass-bg-strong: rgba(38, 38, 42, 0.82);
+  --glass-bg-soft: rgba(24, 24, 27, 0.42);
+  --glass-border: rgba(255, 255, 255, 0.14);
+  --glass-hairline: rgba(255, 255, 255, 0.1);
+  --glass-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --glass-shadow-pop: 0 18px 48px rgba(0, 0, 0, 0.6), 0 4px 12px rgba(0, 0, 0, 0.35);
+  --thumb-bg: #48484a;
+  --thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --track-bg: rgba(120, 120, 128, 0.16);
 }
 
 /* ==========================================================================
@@ -85,6 +119,7 @@ body {
   color: var(--text);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 button {
@@ -95,14 +130,19 @@ button {
   color: inherit;
 }
 
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 1px;
+}
+
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
 }
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar);
-  border-radius: 5px;
-  border: 2px solid transparent;
+  border-radius: var(--radius-pill);
+  border: 2.5px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
@@ -125,8 +165,9 @@ button {
   display: flex;
   height: 100vh;
   width: 100vw;
-  background: var(--bg);
+  position: relative;
   color: var(--text);
+  background: var(--bg);
 }
 
 .editor-area {
@@ -134,14 +175,64 @@ button {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
   position: relative;
+  background: var(--bg);
+}
+/* The document editing surface keeps the original (pre-iOS) palette; only
+   the chrome around it (sidebar, status bar, menus…) stays iOS-styled. */
+:root[data-theme='light'] .editor-area {
+  background: #ffffff;
+}
+:root[data-theme='dark'] .editor-area {
+  background: #0d1117;
 }
 
 .editor-scroll {
   flex: 1;
   overflow-y: auto;
   position: relative;
+}
+:root[data-theme='light'] .editor-scroll {
+  --bg: #ffffff;
+  --bg-secondary: #f6f8fa;
+  --bg-tertiary: #eff2f5;
+  --bg-hover: #f3f4f6;
+  --text: #24292f;
+  --text-secondary: #57606a;
+  --text-muted: #8b949e;
+  --border: #d0d7de;
+  --border-soft: #eaeef2;
+  --accent: #0969da;
+  --code-bg: #f6f8fa;
+  --code-text: #24292f;
+  --blockquote-border: #d0d7de;
+  --blockquote-text: #57606a;
+  --heading: #1f2328;
+  --inline-code-border: rgba(175, 184, 193, 0.35);
+  --selection: #b3d4fc;
+  --check-bg: #ffffff;
+  --table-header-bg: #f6f8fa;
+}
+:root[data-theme='dark'] .editor-scroll {
+  --bg: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --bg-hover: #1c2128;
+  --text: #c9d1d9;
+  --text-secondary: #8b949e;
+  --text-muted: #6e7681;
+  --border: #30363d;
+  --border-soft: #21262d;
+  --accent: #58a6ff;
+  --code-bg: #161b22;
+  --code-text: #c9d1d9;
+  --blockquote-border: #3b434b;
+  --blockquote-text: #8b949e;
+  --heading: #f0f6fc;
+  --inline-code-border: rgba(110, 118, 129, 0.45);
+  --selection: #264f78;
+  --check-bg: #0d1117;
+  --table-header-bg: #161b22;
 }
 
 .wysiwyg-wrap {
@@ -155,7 +246,7 @@ button {
 }
 
 /* ==========================================================================
-   Sidebar (file tree)
+   Sidebar (file tree) — frosted glass panel
    ========================================================================== */
 
 .sidebar {
@@ -165,9 +256,12 @@ button {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--border-soft);
-  background: var(--bg-secondary);
   position: relative;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(28px) saturate(185%);
+  backdrop-filter: blur(28px) saturate(185%);
+  border-right: 1px solid var(--glass-hairline);
+  box-shadow: inset -1px 0 0 var(--glass-border);
 }
 
 .resize-handle {
@@ -189,7 +283,7 @@ button {
 .resize-handle:hover,
 body.resizing .resize-handle {
   background: var(--accent);
-  opacity: 0.4;
+  opacity: 0.45;
 }
 
 body.resizing {
@@ -199,23 +293,28 @@ body.resizing {
 
 .outline-sidebar {
   border-right: none;
-  border-left: 1px solid var(--border-soft);
+  border-left: 1px solid var(--glass-hairline);
+  box-shadow: inset 1px 0 0 var(--glass-border);
 }
 
+/* Segmented-control tab strip (iOS 26) */
 .sidebar-tabs {
   display: flex;
-  gap: 4px;
-  padding: 6px 8px 0;
-  border-bottom: 1px solid var(--border-soft);
+  gap: 2px;
+  margin: 10px 10px 8px;
+  padding: 3px;
+  background: var(--track-bg);
+  border-radius: 11px;
 }
 
 .tab {
   flex: 1;
-  padding: 5px 0;
+  padding: 4px 0;
   font-size: 12.5px;
+  font-weight: 500;
   color: var(--text-secondary);
-  border-radius: 6px 6px 0 0;
-  border-bottom: 2px solid transparent;
+  border-radius: 8px;
+  transition: color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
 }
 .tab:hover {
   color: var(--text);
@@ -223,22 +322,23 @@ body.resizing {
 .tab.active {
   color: var(--text);
   font-weight: 600;
-  border-bottom-color: var(--accent);
+  background: var(--thumb-bg);
+  box-shadow: var(--thumb-shadow);
 }
 
 .sidebar-toolbar {
   display: flex;
   align-items: center;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border-soft);
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--glass-hairline);
   min-height: 41px;
 }
 
 .panel-title {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   color: var(--text-muted);
 }
 
@@ -263,14 +363,23 @@ body.resizing {
 
 .icon-btn {
   margin-left: auto;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
-  padding: 2px 6px;
-  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: var(--radius-pill);
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
 }
 .icon-btn:hover {
   color: var(--text);
   background: var(--bg-hover);
+}
+.icon-btn:active {
+  transform: scale(0.92);
 }
 
 .open-folder-btn {
@@ -278,8 +387,9 @@ body.resizing {
   text-align: left;
   font-size: 13px;
   color: var(--text-secondary);
-  padding: 4px 6px;
-  border-radius: 5px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 .open-folder-btn:hover {
   background: var(--bg-hover);
@@ -305,9 +415,10 @@ body.resizing {
   padding-top: 4px;
   padding-bottom: 4px;
   padding-right: 6px;
-  border-radius: 5px;
+  border-radius: 7px;
   color: var(--text-secondary);
   white-space: nowrap;
+  transition: background 0.13s ease, color 0.13s ease;
 }
 .tree-row:hover {
   background: var(--bg-hover);
@@ -337,18 +448,19 @@ body.resizing {
 }
 
 .tree-empty {
-  padding: 16px 12px;
+  padding: 18px 14px;
   font-size: 12px;
   color: var(--text-muted);
   text-align: center;
+  line-height: 1.6;
 }
 
 .section-label {
-  padding: 10px 10px 4px;
-  font-size: 11px;
+  padding: 12px 10px 5px;
+  font-size: 10.5px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.07em;
   color: var(--text-muted);
 }
 
@@ -364,11 +476,13 @@ body.resizing {
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
-  border-radius: 5px;
+  border-radius: 8px;
   position: sticky;
   top: 0;
-  background: var(--bg-secondary);
   z-index: 2;
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  backdrop-filter: blur(18px) saturate(160%);
 }
 .folder-header .folder-name {
   overflow: hidden;
@@ -383,7 +497,8 @@ body.resizing {
 .loose-row {
   display: flex;
   align-items: center;
-  border-radius: 5px;
+  border-radius: 7px;
+  transition: background 0.13s ease;
 }
 .loose-row:hover {
   background: var(--bg-hover);
@@ -404,7 +519,7 @@ body.resizing {
   min-width: 0;
   text-align: left;
   padding: 4px 6px 4px 12px;
-  border-radius: 5px;
+  border-radius: 7px;
   font-size: 13px;
   color: inherit;
 }
@@ -426,17 +541,17 @@ body.resizing {
 }
 
 .search-bar {
-  padding: 8px;
-  border-bottom: 1px solid var(--border-soft);
+  padding: 10px;
+  border-bottom: 1px solid var(--glass-hairline);
 }
 
 .search-mode-toggle {
   display: flex;
   gap: 2px;
-  margin-top: 6px;
+  margin-top: 8px;
   padding: 2px;
-  background: var(--bg-tertiary);
-  border-radius: 6px;
+  background: var(--track-bg);
+  border-radius: 9px;
 }
 
 .mode-btn {
@@ -444,17 +559,18 @@ body.resizing {
   padding: 3px 4px;
   font-size: 11.5px;
   color: var(--text-secondary);
-  border-radius: 4px;
+  border-radius: 6px;
   white-space: nowrap;
+  transition: color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
 .mode-btn:hover {
   color: var(--text);
 }
 .mode-btn.active {
-  background: var(--bg);
+  background: var(--thumb-bg);
   color: var(--text);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--thumb-shadow);
 }
 /* VS Code-style "whole word" glyph: "ab" between word-boundary bars. */
 .mode-btn.ww {
@@ -467,17 +583,20 @@ body.resizing {
 
 .search-input {
   width: 100%;
-  padding: 6px 10px;
+  padding: 6px 12px;
   font-size: 13px;
   font-family: inherit;
   color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--glass-hairline);
+  border-radius: 9px;
   outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
 }
 .search-input:focus {
-  border-color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: var(--bg-secondary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .search-results {
@@ -496,9 +615,10 @@ body.resizing {
   width: 100%;
   text-align: left;
   padding: 5px 8px;
-  border-radius: 5px;
+  border-radius: 7px;
   color: var(--text);
   font-weight: 600;
+  transition: background 0.13s ease;
 }
 .search-file-header:hover {
   background: var(--bg-hover);
@@ -514,11 +634,12 @@ body.resizing {
 .search-badge {
   flex-shrink: 0;
   font-size: 10px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: 4px;
-  padding: 0 4px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 5px;
+  padding: 0 5px;
 }
 
 .search-count {
@@ -535,8 +656,9 @@ body.resizing {
   width: 100%;
   text-align: left;
   padding: 3px 8px 3px 24px;
-  border-radius: 5px;
+  border-radius: 6px;
   color: var(--text-secondary);
+  transition: background 0.13s ease, color 0.13s ease;
 }
 .search-hit:hover {
   background: var(--bg-hover);
@@ -565,23 +687,25 @@ body.resizing {
 }
 
 /* ==========================================================================
-   In-document find bar
+   In-document find bar — floating glass capsule
    ========================================================================== */
 
 .findbar {
   position: absolute;
-  top: 8px;
-  right: 16px;
+  top: 10px;
+  right: 14px;
   z-index: 900;
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: 6px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
-  padding: 5px 6px;
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  box-shadow: var(--glass-shadow-pop);
+  padding: 6px;
 }
 
 .findbar-main {
@@ -600,17 +724,19 @@ body.resizing {
 
 .findbar input {
   width: 190px;
-  padding: 4px 8px;
+  padding: 4px 10px;
   font-size: 13px;
   font-family: inherit;
   color: var(--text);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 5px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--glass-hairline);
+  border-radius: 8px;
   outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 .findbar input:focus {
-  border-color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .findbar .search-mode-toggle {
@@ -618,7 +744,7 @@ body.resizing {
 }
 .findbar .mode-btn {
   flex: none;
-  padding: 2px 5px;
+  padding: 2px 6px;
 }
 
 .find-count {
@@ -627,13 +753,15 @@ body.resizing {
   color: var(--text-muted);
   text-align: center;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .find-btn {
-  padding: 3px 7px;
-  border-radius: 5px;
+  padding: 3px 8px;
+  border-radius: 7px;
   font-size: 11px;
   color: var(--text-secondary);
+  transition: background 0.13s ease, color 0.13s ease;
 }
 .find-btn:hover {
   background: var(--bg-hover);
@@ -645,17 +773,22 @@ body.resizing {
 }
 
 .replace-btn {
-  padding: 4px 10px;
-  border-radius: 5px;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
   font-size: 12px;
   color: #fff;
   background: var(--accent);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 40%, transparent);
+  transition: filter 0.15s ease, transform 0.1s ease;
 }
 .replace-btn:hover:not(:disabled) {
-  filter: brightness(1.1);
+  filter: brightness(1.12);
+}
+.replace-btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 .replace-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: default;
 }
 
@@ -674,9 +807,10 @@ body.resizing {
   width: 100%;
   text-align: left;
   padding: 3px 8px 3px 8px;
-  border-radius: 5px;
+  border-radius: 7px;
   color: var(--text-secondary);
   white-space: nowrap;
+  transition: background 0.13s ease, color 0.13s ease;
 }
 .outline-item:hover {
   background: var(--bg-hover);
@@ -684,14 +818,19 @@ body.resizing {
 }
 
 .outline-bullet {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   color: var(--text-muted);
-  min-width: 18px;
+  min-width: 20px;
   flex-shrink: 0;
+  text-align: center;
+  padding: 1px 4px;
+  border-radius: 5px;
+  background: var(--bg-tertiary);
 }
 .outline-bullet.h1 {
   color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .outline-text {
@@ -700,7 +839,7 @@ body.resizing {
 }
 
 /* ==========================================================================
-   Status bar
+   Status bar — frosted glass strip
    ========================================================================== */
 
 .statusbar {
@@ -712,8 +851,10 @@ body.resizing {
   padding: 0 12px;
   font-size: 12px;
   color: var(--text-secondary);
-  border-top: 1px solid var(--border-soft);
-  background: var(--bg-secondary);
+  border-top: 1px solid var(--glass-hairline);
+  background: var(--glass-bg-soft);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
   user-select: none;
 }
 
@@ -740,8 +881,9 @@ body.resizing {
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: left;
-  padding: 1px 6px;
-  border-radius: 4px;
+  padding: 2px 8px;
+  border-radius: 7px;
+  transition: background 0.13s ease, color 0.13s ease;
 }
 .status-path-btn:not(.disabled) {
   cursor: copy;
@@ -761,22 +903,24 @@ body.resizing {
   left: 50%;
   transform: translateX(-50%);
   z-index: 1200;
-  padding: 6px 14px;
+  padding: 7px 16px;
   font-size: 12.5px;
-  border-radius: 6px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow-pop);
   pointer-events: none;
   animation: toast-in 0.18s ease;
 }
 .status-toast.success {
-  background: var(--bg-tertiary);
   color: var(--text);
-  border: 1px solid var(--border);
 }
 .status-toast.error {
-  background: #fdecec;
-  color: #b42318;
-  border: 1px solid #f3b7b4;
+  background: color-mix(in srgb, #ff3b30 16%, var(--glass-bg-strong));
+  color: #ff453a;
+  border-color: color-mix(in srgb, #ff453a 45%, transparent);
 }
 
 @keyframes toast-in {
@@ -791,28 +935,30 @@ body.resizing {
 }
 
 /* ==========================================================================
-   Status bar context menu (show/hide items)
+   Status bar context menu (show/hide items) — floating glass
    ========================================================================== */
 
 .statusbar-menu {
   position: fixed;
   z-index: 1200;
   min-width: 190px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  backdrop-filter: blur(28px) saturate(190%);
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  box-shadow: var(--glass-shadow-pop);
   padding: 5px;
   font-size: 13px;
   user-select: none;
 }
 
 .menu-title {
-  padding: 5px 10px 6px;
+  padding: 6px 10px 6px;
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   color: var(--text-muted);
 }
 
@@ -823,9 +969,10 @@ body.resizing {
   width: 100%;
   text-align: left;
   padding: 5px 10px;
-  border-radius: 5px;
+  border-radius: 7px;
   color: var(--text);
   white-space: nowrap;
+  transition: background 0.12s ease;
 }
 .menu-item:hover {
   background: var(--bg-hover);
@@ -835,13 +982,15 @@ body.resizing {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 5px;
   font-size: 10px;
   color: #fff;
+  background: var(--check-bg);
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 .menu-check.checked {
   background: var(--accent);
@@ -855,15 +1004,17 @@ body.resizing {
 }
 
 .status-btn {
-  padding: 1px 6px;
-  border-radius: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
   font-size: 12px;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 .status-btn:hover {
   background: var(--bg-hover);
 }
 .status-btn.active {
   color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .status-zoom {
@@ -985,7 +1136,7 @@ li.ProseMirror-selectednode::after {
 }
 
 /* ==========================================================================
-   Editor context menu
+   Editor context menu — floating glass
    ========================================================================== */
 
 .ctx-menu {
@@ -993,10 +1144,12 @@ li.ProseMirror-selectednode::after {
   z-index: 1000;
   min-width: 190px;
   max-width: 260px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  backdrop-filter: blur(28px) saturate(190%);
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  box-shadow: var(--glass-shadow-pop);
   padding: 5px;
   font-size: 13px;
   user-select: none;
@@ -1010,9 +1163,10 @@ li.ProseMirror-selectednode::after {
   width: 100%;
   text-align: left;
   padding: 6px 10px;
-  border-radius: 5px;
+  border-radius: 7px;
   color: var(--text);
   white-space: nowrap;
+  transition: background 0.12s ease;
 }
 .ctx-item:hover {
   background: var(--bg-hover);
@@ -1033,7 +1187,7 @@ li.ProseMirror-selectednode::after {
 
 .ctx-separator {
   height: 1px;
-  background: var(--border-soft);
+  background: var(--glass-hairline);
   margin: 4px 8px;
 }
 
@@ -1415,10 +1569,61 @@ li.ProseMirror-selectednode::after {
    ========================================================================== */
 
 body.export-page {
-  background: var(--bg);
+  background: #ffffff;
   color: var(--text);
   overflow: auto;
   padding: 0;
+}
+:root[data-theme='dark'] body.export-page {
+  background: #0d1117;
+}
+
+/* The exported document uses the same original palette as the editor. */
+body.export-page {
+  --bg: #ffffff;
+  --bg-secondary: #f6f8fa;
+  --bg-tertiary: #eff2f5;
+  --bg-hover: #f3f4f6;
+  --text: #24292f;
+  --text-secondary: #57606a;
+  --text-muted: #8b949e;
+  --border: #d0d7de;
+  --border-soft: #eaeef2;
+  --accent: #0969da;
+  --code-bg: #f6f8fa;
+  --code-text: #24292f;
+  --blockquote-border: #d0d7de;
+  --blockquote-text: #57606a;
+  --heading: #1f2328;
+  --inline-code-border: rgba(175, 184, 193, 0.35);
+  --check-bg: #ffffff;
+  --table-header-bg: #f6f8fa;
+}
+:root[data-theme='dark'] body.export-page {
+  --bg: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --bg-hover: #1c2128;
+  --text: #c9d1d9;
+  --text-secondary: #8b949e;
+  --text-muted: #6e7681;
+  --border: #30363d;
+  --border-soft: #21262d;
+  --accent: #58a6ff;
+  --code-bg: #161b22;
+  --code-text: #c9d1d9;
+  --blockquote-border: #3b434b;
+  --blockquote-text: #8b949e;
+  --heading: #f0f6fc;
+  --inline-code-border: rgba(110, 118, 129, 0.45);
+  --check-bg: #0d1117;
+  --table-header-bg: #161b22;
+}
+
+/* Glass effects must not leak into printed output. */
+body.export-page * {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
 }
 
 body.export-page .md-body {
