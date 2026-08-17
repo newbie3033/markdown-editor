@@ -1,0 +1,7 @@
+# GitHub Actions builds Windows packages on a native Windows runner, so use
+# electron-builder's maintained NSIS template instead of the custom template
+# used by the local cross-build script.
+extends: electron-builder.yml
+
+nsis:
+  script: null

@@ -17,6 +17,7 @@
     "build:unpack": "electron-vite build && electron-builder --dir --publish never",
     "build:linux": "electron-vite build && electron-builder --linux --publish never",
     "build:win": "electron-vite build && electron-builder --win --publish never",
+    "build:win:ci": "electron-vite build && electron-builder --win --publish never --config electron-builder.windows.yml",
     "build:mac": "electron-vite build && electron-builder --mac --publish never"
   },
   "dependencies": {

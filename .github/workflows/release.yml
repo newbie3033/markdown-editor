@@ -32,7 +32,7 @@ jobs:
             script: build:linux
           - platform: windows-x64
             runner: windows-latest
-            script: build:win
+            script: build:win:ci
           # macos-15 is Apple Silicon; macos-15-intel is the Intel runner.
           - platform: macos-arm64
             runner: macos-15
