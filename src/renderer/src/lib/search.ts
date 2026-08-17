@@ -1,11 +1,28 @@
 import type { Editor } from '@milkdown/kit/core'
 import { editorStateCtx, editorViewCtx } from '@milkdown/kit/core'
 import { TextSelection } from '@milkdown/prose/state'
-import { compileSearchRegex, type SearchFlags } from '../../../shared/ipc'
+import {
+  compileSearchRegex,
+  type RegexTextSegment,
+  type SearchFlags
+} from '../../../shared/ipc'
 
 export interface TextMatch {
   from: number
   to: number
+}
+
+const MAX_IN_DOCUMENT_MATCHES = 10_000
+
+function editorTextSegments(editor: Editor): RegexTextSegment[] {
+  const segments: RegexTextSegment[] = []
+  editor.action((ctx) => {
+    const state = ctx.get(editorStateCtx)
+    state.doc.descendants((node, pos) => {
+      if (node.isText && node.text) segments.push({ text: node.text, offset: pos })
+    })
+  })
+  return segments
 }
 
 /**
@@ -13,6 +30,7 @@ export interface TextMatch {
  * (case-sensitive / whole-word / regex options via `flags`).
  */
 export function findTextMatches(editor: Editor, query: string, flags: SearchFlags = {}): TextMatch[] {
+  if (flags.regex) return []
   const regex = compileSearchRegex(query, flags)
   if (!regex) return []
   const matches: TextMatch[] = []
@@ -25,13 +43,22 @@ export function findTextMatches(editor: Editor, query: string, flags: SearchFlag
       const re = compileSearchRegex(query, flags)
       if (!re) return
       let execResult: RegExpExecArray | null
-      while ((execResult = re.exec(text)) !== null) {
+      while (matches.length < MAX_IN_DOCUMENT_MATCHES && (execResult = re.exec(text)) !== null) {
         matches.push({ from: pos + execResult.index, to: pos + execResult.index + execResult[0].length })
         if (execResult[0].length === 0) re.lastIndex += 1
       }
     })
   })
   return matches
+}
+
+export async function findTextMatchesAsync(
+  editor: Editor,
+  query: string,
+  flags: SearchFlags = {}
+): Promise<TextMatch[]> {
+  if (!flags.regex) return findTextMatches(editor, query, flags)
+  return window.api.findRegexMatches(editorTextSegments(editor), query, flags)
 }
 
 /** Select (and scroll to) a match inside the editor. */
@@ -48,15 +75,25 @@ export function selectMatch(editor: Editor, match: TextMatch, focus = true): voi
 
 /** Find all occurrences in a plain string (source mode). */
 export function findInString(text: string, query: string, flags: SearchFlags = {}): TextMatch[] {
+  if (flags.regex) return []
   const regex = compileSearchRegex(query, flags)
   if (!regex) return []
   const matches: TextMatch[] = []
   let execResult: RegExpExecArray | null
-  while ((execResult = regex.exec(text)) !== null) {
+  while (matches.length < MAX_IN_DOCUMENT_MATCHES && (execResult = regex.exec(text)) !== null) {
     matches.push({ from: execResult.index, to: execResult.index + execResult[0].length })
     if (execResult[0].length === 0) regex.lastIndex += 1
   }
   return matches
+}
+
+export async function findInStringAsync(
+  text: string,
+  query: string,
+  flags: SearchFlags = {}
+): Promise<TextMatch[]> {
+  if (!flags.regex) return findInString(text, query, flags)
+  return window.api.findRegexMatches([{ text, offset: 0 }], query, flags)
 }
 
 /** Replace a single match inside the editor (positions are ProseMirror positions). */

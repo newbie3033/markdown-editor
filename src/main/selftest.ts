@@ -235,10 +235,61 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     await fs.unlink(deniedPath)
     check('filesystem capability rejects unapproved path', denied === true)
 
+    const releasablePath = join('/tmp', `inkmark-release-${process.pid}.png`)
+    await fs.writeFile(releasablePath, png)
+    const released = (await js(`(async () => {
+      window.api.queueSelfTestDroppedPath(${JSON.stringify(releasablePath)})
+      const file = new File([], 'release.png', { type: 'image/png' })
+      const granted = await window.api.authorizeDroppedFile(file)
+      await window.api.releaseDocumentAccess(granted.path)
+      return window.api.pathExists(granted.path)
+    })()`)) as boolean
+    await fs.unlink(releasablePath)
+    check('closing a loose capability revokes file access', released === false)
+
     const unsafeRegex = (await js(
       `window.api.searchFiles(${JSON.stringify(TEST_DIR)}, '(a+)+$', { regex: true })`
     )) as unknown[]
     check('unsafe search regex rejected', Array.isArray(unsafeRegex) && unsafeRegex.length === 0)
+
+    const catastrophicRegex = (await js(`(async () => {
+      const started = Date.now()
+      const rejected = await window.api.findRegexMatches(
+        [{ text: 'a'.repeat(40) + '!', offset: 0 }],
+        '(a|aa)+$',
+        { regex: true }
+      ).then(() => false, () => true)
+      return { rejected, elapsed: Date.now() - started }
+    })()`)) as { rejected: boolean; elapsed: number }
+    check(
+      'catastrophic regex is terminated off the UI thread',
+      catastrophicRegex.rejected && catastrophicRegex.elapsed < 2500,
+      JSON.stringify(catastrophicRegex)
+    )
+
+    const bomPath = join(TEST_DIR, 'docs', 'bom.md')
+    await fs.writeFile(bomPath, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('# BOM\n')]))
+    const bomRead = (await js(`window.api.readFile(${JSON.stringify(bomPath)})`)) as {
+      content: string
+      version: { utf8Bom?: boolean }
+    }
+    await js(
+      `window.api.writeFile(${JSON.stringify(bomPath)}, '# BOM saved\\n', ${JSON.stringify(bomRead.version)})`
+    )
+    const bomSaved = await fs.readFile(bomPath)
+    check(
+      'UTF-8 BOM is preserved across save',
+      bomRead.content === '# BOM\n' &&
+        bomRead.version.utf8Bom === true &&
+        bomSaved.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))
+    )
+
+    const invalidUtf8Path = join(TEST_DIR, 'docs', 'invalid-utf8.md')
+    await fs.writeFile(invalidUtf8Path, Buffer.from([0x23, 0x20, 0xff, 0x0a]))
+    const invalidUtf8Rejected = (await js(
+      `window.api.readFile(${JSON.stringify(invalidUtf8Path)}).then(() => false, () => true)`
+    )) as boolean
+    check('invalid UTF-8 is rejected instead of replaced', invalidUtf8Rejected)
 
     const draft = {
       filePath: null,
@@ -254,6 +305,16 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     await js(`window.api.clearRecoveryDraft()`)
     const clearedDraft = await js(`window.api.loadRecoveryDraft()`)
     check('recovery draft clears', clearedDraft === null)
+
+    const recoveryEscalationRejected = (await js(`window.api.saveRecoveryDraft({
+      filePath: ${JSON.stringify(join('/tmp', `inkmark-recovery-denied-${process.pid}.md`))},
+      content: '# denied',
+      cleanContent: '',
+      fileVersion: null,
+      sourceMode: true,
+      updatedAt: Date.now()
+    }).then(() => false, () => true)`)) as boolean
+    check('recovery draft cannot grant an unauthorized path', recoveryEscalationRejected)
 
     // 2. OS-backed files yield only a capability-backed path. They are copied
     // into assets later, after a document path is available.
@@ -273,6 +334,14 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       `window.api.saveImage({ data: Uint8Array.from([137,80,78,71,13,10,26,10]).buffer, name: 'p.png', docPath: '/tmp/inkmark-selftest/docs/doc.md' })`
     )) as { src: string } | null
     check('saveImage(data)', saved2?.src === 'assets/p.png', JSON.stringify(saved2))
+
+    const oversizedImage = join(TEST_DIR, 'docs', 'too-large.png')
+    await fs.writeFile(oversizedImage, Buffer.alloc(0))
+    await fs.truncate(oversizedImage, 32 * 1024 * 1024 + 1)
+    const oversizedRejected = (await js(
+      `window.api.saveImage({ sourcePath: ${JSON.stringify(oversizedImage)}, docPath: '/tmp/inkmark-selftest/docs/doc.md' }).then(() => false, () => true)`
+    )) as boolean
+    check('same-directory image is validated before direct linking', oversizedRejected)
 
     // 4. Context menu opens on right click; clicking 分割线 (hr) inserts an hr.
     const menuInfo = (await js(`(async () => {
@@ -1126,13 +1195,27 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       )
 
       const missingHtml = html.replace('assets/export.png', 'assets/no-longer-exists.png')
-      await js(`window.api.exportPdf('missing-image-doc', ${JSON.stringify(missingHtml)}, ${JSON.stringify(join(TEST_DIR, 'docs', 'export-test.md'))})`)
+      const previousMessageBox = dialog.showMessageBox
+      let missingImageWarning = false
+      dialog.showMessageBox = (async (...args: unknown[]) => {
+        const options = args[args.length - 1] as { type?: string; detail?: string }
+        if (options?.type === 'warning' && options.detail?.includes('no-longer-exists.png')) {
+          missingImageWarning = true
+        }
+        return { response: 0, checkboxChecked: false }
+      }) as typeof dialog.showMessageBox
+      try {
+        await js(`window.api.exportPdf('missing-image-doc', ${JSON.stringify(missingHtml)}, ${JSON.stringify(join(TEST_DIR, 'docs', 'export-test.md'))})`)
+      } finally {
+        dialog.showMessageBox = previousMessageBox
+      }
       const missingPdf = await fs.readFile(join(EXPORT_DIR, 'missing-image-doc.pdf')).catch(() => null)
       check(
         'export pdf tolerates missing local image',
         missingPdf != null && missingPdf.length > 1000 && missingPdf.subarray(0, 4).toString() === '%PDF',
         `len=${missingPdf?.length ?? 0}`
       )
+      check('export reports missing local images to the user', missingImageWarning)
     } finally {
       dialog.showSaveDialog = originalShowSave
     }

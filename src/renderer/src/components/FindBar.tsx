@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Editor } from '@milkdown/kit/core'
 import type { SearchFlags } from '../../../shared/ipc'
 import { useI18n } from '../lib/i18n'
 import {
-  findInString,
-  findTextMatches,
+  findInStringAsync,
+  findTextMatchesAsync,
   replaceAllInString,
   replaceAllMatchesInEditor,
   replaceMatchInEditor,
@@ -55,12 +55,33 @@ export function FindBar({
     if (replaceOpen) replaceInputRef.current?.focus()
   }, [replaceOpen])
 
-  const matches = useMemo(() => {
-    if (!query.trim()) return []
-    if (sourceMode) return findInString(sourceText, query, flags)
-    const editor = getEditor()
-    return editor ? findTextMatches(editor, query, flags) : []
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  const [matches, setMatches] = useState<Array<{ from: number; to: number }>>([])
+
+  useEffect(() => {
+    let canceled = false
+    const updateMatches = async (): Promise<void> => {
+      if (!query.trim()) {
+        setMatches([])
+        return
+      }
+      setMatches([])
+      try {
+        const editor = getEditor()
+        const next = sourceMode
+          ? await findInStringAsync(sourceText, query, flags)
+          : editor
+            ? await findTextMatchesAsync(editor, query, flags)
+            : []
+        if (!canceled) setMatches(next)
+      } catch (error) {
+        console.error('Search failed', error)
+        if (!canceled) setMatches([])
+      }
+    }
+    void updateMatches()
+    return () => {
+      canceled = true
+    }
   }, [query, flags, sourceMode, sourceText, getEditor])
 
   const selectAt = (index: number, focus: boolean): void => {
@@ -103,7 +124,7 @@ export function FindBar({
     setCurrent(0)
     if (matches.length > 0) selectAt(0, false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, flags, sourceMode, sourceText])
+  }, [matches, query, flags, sourceMode, sourceText])
 
   const replaceCurrent = (): void => {
     if (!query.trim() || matches.length === 0) return

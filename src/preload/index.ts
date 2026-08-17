@@ -17,10 +17,15 @@ import {
   type FileVersion,
   type ReadFileResult,
   type WriteFileResult,
-  type RecoveryDraft
+  type RecoveryDraft,
+  type RegexTextSegment,
+  type TextRange
 } from '../shared/ipc'
 
 const selfTestDroppedPaths: string[] = []
+const selfTestEnabled =
+  process.argv.includes('--inkmark-selftest-authorized') &&
+  !process.argv.includes('--inkmark-selftest-disabled')
 
 const api: InkMarkApi = {
   openFileDialog: (): Promise<FileResult> => ipcRenderer.invoke(IPC.openFileDialog),
@@ -38,8 +43,8 @@ const api: InkMarkApi = {
       path = webUtils.getPathForFile(file)
     } catch {}
     // Synthetic File objects do not carry an OS path across contextBridge.
-    // The explicit queue is available only to the packaged self-test.
-    if (!path && process.env['INKMARK_SELFTEST'] === '1') {
+    // The explicit queue is available only to the development self-test.
+    if (!path && selfTestEnabled) {
       path = selfTestDroppedPaths.shift() ?? ''
     }
     if (!path) return null
@@ -47,7 +52,7 @@ const api: InkMarkApi = {
   },
 
   queueSelfTestDroppedPath: (path: string): void => {
-    if (process.env['INKMARK_SELFTEST'] !== '1') {
+    if (!selfTestEnabled) {
       throw new Error('Self-test drop paths are disabled')
     }
     selfTestDroppedPaths.push(path)
@@ -90,6 +95,18 @@ const api: InkMarkApi = {
 
   searchFiles: (folderPath: string, query: string, flags?: SearchFlags): Promise<FileSearchResult[]> =>
     ipcRenderer.invoke(IPC.searchFiles, folderPath, query, flags),
+
+  findRegexMatches: (
+    segments: RegexTextSegment[],
+    query: string,
+    flags?: SearchFlags
+  ): Promise<TextRange[]> => ipcRenderer.invoke(IPC.findRegexMatches, segments, query, flags),
+
+  releaseDocumentAccess: (path: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.releaseDocumentAccess, path),
+
+  releaseDirectoryAccess: (path: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.releaseDirectoryAccess, path),
 
   confirmSave: (fileName: string): Promise<SaveChoice> => ipcRenderer.invoke(IPC.confirmSave, fileName),
 

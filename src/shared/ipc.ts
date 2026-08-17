@@ -22,6 +22,8 @@ export interface FileVersion {
   mtimeMs: number
   size: number
   sha256: string
+  /** Preserve a UTF-8 BOM when overwriting an existing document. */
+  utf8Bom?: boolean
 }
 
 export interface ReadFileResult {
@@ -96,6 +98,17 @@ export interface FileSearchResult {
   nameMatch: boolean
   totalMatches: number
   matches: SearchMatch[]
+}
+
+export interface RegexTextSegment {
+  text: string
+  /** Offset added to each match (for ProseMirror text-node positions). */
+  offset: number
+}
+
+export interface TextRange {
+  from: number
+  to: number
 }
 
 /** VS Code-style search options. All default to false. */
@@ -195,6 +208,9 @@ export const IPC = {
   saveImage: 'image:save',
   pickImage: 'image:pick',
   searchFiles: 'search:files',
+  findRegexMatches: 'search:regex-matches',
+  releaseDocumentAccess: 'file:release-access',
+  releaseDirectoryAccess: 'folder:release-access',
   confirmSave: 'app:confirm-save',
   showError: 'app:show-error',
   copyText: 'clipboard:write-text',
@@ -254,6 +270,9 @@ export interface InkMarkApi {
   saveImage(payload: SaveImagePayload): Promise<SaveImageResult | null>
   pickImage(): Promise<PickImageResult>
   searchFiles(folderPath: string, query: string, flags?: SearchFlags): Promise<FileSearchResult[]>
+  findRegexMatches(segments: RegexTextSegment[], query: string, flags?: SearchFlags): Promise<TextRange[]>
+  releaseDocumentAccess(path: string): Promise<void>
+  releaseDirectoryAccess(path: string): Promise<void>
   confirmSave(fileName: string): Promise<SaveChoice>
   showError(message: string, detail?: string): Promise<void>
   openExternal(url: string): Promise<void>

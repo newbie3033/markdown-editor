@@ -20,6 +20,7 @@ import {
 } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
+import { Worker } from 'node:worker_threads'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
@@ -38,6 +39,8 @@ import {
   type SaveResult,
   type SearchMatch,
   type SearchFlags,
+  type RegexTextSegment,
+  type TextRange,
   type WriteFileResult
 } from '../shared/ipc'
 import { getLocale, setLocale, t } from './i18n'
@@ -48,11 +51,16 @@ const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.sv
 
 const MAX_SEARCH_FILES = 300
 const MAX_MATCHES_PER_FILE = 60
+const MAX_IN_DOCUMENT_MATCHES = 10_000
+const REGEX_TIMEOUT_MS = 1_000
 const MAX_TREE_ENTRIES = 5000
 const MAX_SEARCH_FILE_BYTES = 8 * 1024 * 1024
 const MAX_SEARCH_TOTAL_BYTES = 32 * 1024 * 1024
 const MAX_OPEN_FILE_BYTES = 64 * 1024 * 1024
 const MAX_IMAGE_BYTES = 32 * 1024 * 1024
+const MAX_EXPORT_IMAGE_BYTES = 128 * 1024 * 1024
+const MAX_RECOVERY_CONTENT_BYTES = MAX_OPEN_FILE_BYTES
+const MAX_RECOVERY_FILE_BYTES = MAX_OPEN_FILE_BYTES * 2 + 1024 * 1024
 const RECOVERY_FILE = 'recovery-draft.json'
 const BACKUP_DIR = 'backups'
 const ASSET_ORIGIN = 'inkmark-asset://local'
@@ -71,6 +79,8 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
 
 const grantedFiles = new Set<string>()
 const grantedDirectories = new Set<string>()
+const documentAssetDirectories = new Map<string, string>()
+const documentImageGrants = new Map<string, Set<string>>()
 const pendingExportDocuments = new Map<string, string>()
 
 function canonicalPath(path: string): string {
@@ -98,13 +108,24 @@ export function grantFileAccess(path: string): void {
 export function grantDocumentAccess(path: string): void {
   const canonical = canonicalPath(path)
   grantedFiles.add(canonical)
-  // Relative links and local images are part of a Markdown document's normal
-  // working set, so authorize its containing directory—not arbitrary paths.
-  grantedDirectories.add(dirname(canonical))
+  // Clipboard images are written beneath this document-specific directory.
+  // Opening a loose document must not authorize its entire parent directory.
+  documentAssetDirectories.set(canonical, canonicalPath(join(dirname(canonical), 'assets')))
 }
 
 export function grantDirectoryAccess(path: string): void {
   grantedDirectories.add(canonicalPath(path))
+}
+
+function releaseDocumentAccess(path: string): void {
+  const canonical = canonicalPath(path)
+  grantedFiles.delete(canonical)
+  documentAssetDirectories.delete(canonical)
+  documentImageGrants.delete(canonical)
+}
+
+function releaseDirectoryAccess(path: string): void {
+  grantedDirectories.delete(canonicalPath(path))
 }
 
 function assertPathAccess(path: string): string {
@@ -112,7 +133,9 @@ function assertPathAccess(path: string): string {
   const canonical = canonicalPath(path)
   if (
     !grantedFiles.has(canonical) &&
-    !Array.from(grantedDirectories).some((root) => isWithin(canonical, root))
+    !Array.from(grantedDirectories).some((root) => isWithin(canonical, root)) &&
+    !Array.from(documentAssetDirectories.values()).some((root) => isWithin(canonical, root)) &&
+    !Array.from(documentImageGrants.values()).some((paths) => paths.has(canonical))
   ) {
     throw new Error('Filesystem path was not authorized by the user')
   }
@@ -154,6 +177,8 @@ function localImagePath(value: string, documentPath: string): string | null {
 
 /** Grant only local image files explicitly referenced by the opened Markdown. */
 function grantReferencedImages(documentPath: string, content: string): void {
+  const canonicalDocument = canonicalPath(documentPath)
+  const grants = new Set<string>()
   const sources: string[] = []
   const markdownImage = /!\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))/g
   const htmlImage = /<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi
@@ -161,8 +186,9 @@ function grantReferencedImages(documentPath: string, content: string): void {
   for (const match of content.matchAll(htmlImage)) sources.push(match[1] ?? '')
   for (const src of sources) {
     const path = localImagePath(src, documentPath)
-    if (path && IMAGE_EXTENSIONS.has(extname(path).toLowerCase())) grantFileAccess(path)
+    if (path && IMAGE_EXTENSIONS.has(extname(path).toLowerCase())) grants.add(canonicalPath(path))
   }
+  documentImageGrants.set(canonicalDocument, grants)
 }
 
 function decodeHtmlAttribute(value: string): string {
@@ -213,26 +239,52 @@ async function readHandleSnapshot(
 async function readUtf8(path: string): Promise<string> {
   const handle = await fs.open(path, 'r')
   try {
-    return (await readHandleSnapshot(handle, MAX_SEARCH_FILE_BYTES)).data.toString('utf8')
+    return decodeUtf8Document((await readHandleSnapshot(handle, MAX_SEARCH_FILE_BYTES)).data).content
   } finally {
     await handle.close()
   }
+}
+
+function hasUtf8Bom(data: Uint8Array): boolean {
+  return data.byteLength >= 3 && data[0] === 0xef && data[1] === 0xbb && data[2] === 0xbf
+}
+
+function decodeUtf8Document(data: Uint8Array): { content: string; utf8Bom: boolean } {
+  const utf8Bom = hasUtf8Bom(data)
+  try {
+    const content = new TextDecoder('utf-8', { fatal: true }).decode(
+      utf8Bom ? data.subarray(3) : data
+    )
+    return { content, utf8Bom }
+  } catch {
+    throw new Error('The file is not valid UTF-8 and cannot be opened safely')
+  }
+}
+
+function encodeDocument(content: string, utf8Bom = false): Buffer {
+  const body = Buffer.from(content, 'utf8')
+  return utf8Bom ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), body]) : body
 }
 
 function sha256(data: string | Uint8Array): string {
   return createHash('sha256').update(data).digest('hex')
 }
 
-function toFileVersion(stat: { mtimeMs: number; size: number }, hash: string): FileVersion {
-  return { mtimeMs: stat.mtimeMs, size: stat.size, sha256: hash }
+function toFileVersion(
+  stat: { mtimeMs: number; size: number },
+  hash: string,
+  utf8Bom?: boolean
+): FileVersion {
+  return { mtimeMs: stat.mtimeMs, size: stat.size, sha256: hash, utf8Bom }
 }
 
 async function readDocument(path: string): Promise<ReadFileResult> {
   const handle = await fs.open(path, 'r')
   try {
     const { data, stat } = await readHandleSnapshot(handle, MAX_OPEN_FILE_BYTES)
-    const version = toFileVersion(stat, sha256(data))
-    const content = data.toString('utf8')
+    const decoded = decodeUtf8Document(data)
+    const version = toFileVersion(stat, sha256(data), decoded.utf8Bom)
+    const content = decoded.content
     grantReferencedImages(path, content)
     return { content, version }
   } finally {
@@ -250,10 +302,12 @@ async function currentVersion(path: string): Promise<FileVersion | null> {
       if (stat.size > MAX_OPEN_FILE_BYTES) {
         // Size/mtime still provide a bounded baseline for a native-dialog
         // overwrite without reading an arbitrarily large target into memory.
-        return toFileVersion(stat, '<large-file>')
+        const prefix = Buffer.allocUnsafe(Math.min(3, stat.size))
+        if (prefix.byteLength > 0) await handle.read(prefix, 0, prefix.byteLength, 0)
+        return toFileVersion(stat, '<large-file>', hasUtf8Bom(prefix))
       }
       const { data } = await readHandleSnapshot(handle, MAX_OPEN_FILE_BYTES)
-      return toFileVersion(stat, sha256(data))
+      return toFileVersion(stat, sha256(data), hasUtf8Bom(data))
     } finally {
       await handle.close()
     }
@@ -347,7 +401,8 @@ async function atomicWriteFile(
     } catch {
       // The file contents were already flushed and renamed successfully.
     }
-    return toFileVersion(await fs.stat(targetPath), sha256(data))
+    const bytes = typeof data === 'string' ? Buffer.from(data, 'utf8') : data
+    return toFileVersion(await fs.stat(targetPath), sha256(bytes), hasUtf8Bom(bytes))
   } finally {
     if (!renamed) await fs.unlink(tempPath).catch(() => undefined)
   }
@@ -366,15 +421,150 @@ function isRecoveryDraft(value: unknown): value is RecoveryDraft {
     (!!version &&
       typeof version.mtimeMs === 'number' &&
       typeof version.size === 'number' &&
-      typeof version.sha256 === 'string')
+      typeof version.sha256 === 'string' &&
+      (version.utf8Bom === undefined || typeof version.utf8Bom === 'boolean'))
+  const contentBytes = typeof draft.content === 'string' ? Buffer.byteLength(draft.content) : Infinity
+  const cleanBytes =
+    typeof draft.cleanContent === 'string' ? Buffer.byteLength(draft.cleanContent) : Infinity
   return (
     (typeof draft.filePath === 'string' || draft.filePath === null) &&
     typeof draft.content === 'string' &&
     typeof draft.cleanContent === 'string' &&
     validVersion &&
     typeof draft.sourceMode === 'boolean' &&
-    typeof draft.updatedAt === 'number'
+    typeof draft.updatedAt === 'number' &&
+    contentBytes <= MAX_RECOVERY_CONTENT_BYTES &&
+    cleanBytes <= MAX_RECOVERY_CONTENT_BYTES &&
+    contentBytes + cleanBytes <= MAX_RECOVERY_FILE_BYTES
   )
+}
+
+const REGEX_WORKER_SOURCE = String.raw`
+const { parentPort, workerData } = require('node:worker_threads')
+
+function makeRegex(query, flags) {
+  let pattern = query.trim()
+  if (flags.wholeWord) {
+    pattern = '(?<![\\p{L}\\p{N}_])(?:' + pattern + ')(?![\\p{L}\\p{N}_])'
+  }
+  const parts = ['g', 'm', 'u']
+  if (!flags.caseSensitive) parts.push('i')
+  return new RegExp(pattern, parts.join(''))
+}
+
+function ranges() {
+  const output = []
+  for (const segment of workerData.segments) {
+    const regex = makeRegex(workerData.query, workerData.flags)
+    let match
+    while (output.length < workerData.maxMatches && (match = regex.exec(segment.text)) !== null) {
+      output.push({ from: segment.offset + match.index, to: segment.offset + match.index + match[0].length })
+      if (match[0].length === 0) regex.lastIndex += 1
+    }
+    if (output.length >= workerData.maxMatches) break
+  }
+  return output
+}
+
+function files() {
+  const output = []
+  for (const file of workerData.files) {
+    const nameMatch = makeRegex(workerData.query, workerData.flags).test(file.name)
+    const regex = makeRegex(workerData.query, workerData.flags)
+    const matches = []
+    let totalMatches = 0
+    let line = 1
+    let lineStart = 0
+    let scanIndex = 0
+    let match
+    while (totalMatches < workerData.maxDocumentMatches && (match = regex.exec(file.content)) !== null) {
+      if (matches.length < workerData.maxMatchesPerFile) {
+        const index = match.index
+        while (scanIndex < index) {
+          const newline = file.content.indexOf('\n', scanIndex)
+          if (newline === -1 || newline >= index) break
+          line += 1
+          lineStart = newline + 1
+          scanIndex = newline + 1
+        }
+        scanIndex = index
+        let lineEnd = file.content.indexOf('\n', index)
+        if (lineEnd === -1) lineEnd = file.content.length
+        matches.push({
+          line,
+          text: file.content.slice(lineStart, lineEnd).trim().slice(0, 120),
+          globalIndex: totalMatches
+        })
+      }
+      totalMatches += 1
+      if (match[0].length === 0) regex.lastIndex += 1
+    }
+    if (nameMatch || matches.length > 0) {
+      output.push({ path: file.path, name: file.name, nameMatch, totalMatches, matches })
+    }
+  }
+  return output
+}
+
+try {
+  parentPort.postMessage(workerData.kind === 'ranges' ? ranges() : files())
+} catch (error) {
+  throw error
+}
+`
+
+function runRegexWorker<Result>(workerData: Record<string, unknown>): Promise<Result> {
+  return new Promise((resolveWorker, rejectWorker) => {
+    const worker = new Worker(REGEX_WORKER_SOURCE, { eval: true, workerData })
+    let settled = false
+    const finish = (callback: () => void): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      callback()
+    }
+    const timer = setTimeout(() => {
+      finish(() => {
+        void worker.terminate()
+        rejectWorker(new Error('Regular expression search timed out'))
+      })
+    }, REGEX_TIMEOUT_MS)
+    worker.once('message', (result: Result) => finish(() => resolveWorker(result)))
+    worker.once('error', (error) => finish(() => rejectWorker(error)))
+    worker.once('exit', (code) => {
+      if (code !== 0) finish(() => rejectWorker(new Error('Regular expression worker stopped')))
+    })
+  })
+}
+
+async function findRegexMatches(
+  segments: RegexTextSegment[],
+  query: string,
+  flags: SearchFlags
+): Promise<TextRange[]> {
+  if (!flags.regex || !compileSearchRegex(query, flags)) return []
+  if (!Array.isArray(segments) || segments.length > MAX_IN_DOCUMENT_MATCHES) {
+    throw new TypeError('Invalid search segments')
+  }
+  let totalBytes = 0
+  for (const segment of segments) {
+    if (
+      !segment ||
+      typeof segment.text !== 'string' ||
+      typeof segment.offset !== 'number' ||
+      !Number.isSafeInteger(segment.offset) ||
+      segment.offset < 0
+    ) throw new TypeError('Invalid search segment')
+    totalBytes += Buffer.byteLength(segment.text)
+    if (totalBytes > MAX_OPEN_FILE_BYTES) throw new Error('Search document is too large')
+  }
+  return runRegexWorker<TextRange[]>({
+    kind: 'ranges',
+    segments,
+    query: query.trim(),
+    flags,
+    maxMatches: MAX_IN_DOCUMENT_MATCHES
+  })
 }
 
 /** Walk a directory and collect markdown file paths (flat list, budget-capped). */
@@ -412,6 +602,32 @@ async function searchFiles(
 
   const files: string[] = []
   await collectMarkdownFiles(folderPath, 0, files)
+
+  if (flags.regex) {
+    const workerFiles: Array<{ path: string; name: string; content: string }> = []
+    let searchedBytes = 0
+    for (const file of files) {
+      try {
+        const stat = await fs.stat(file)
+        if (stat.size > MAX_SEARCH_FILE_BYTES || searchedBytes + stat.size > MAX_SEARCH_TOTAL_BYTES) {
+          continue
+        }
+        const content = await readUtf8(file)
+        searchedBytes += Buffer.byteLength(content)
+        workerFiles.push({ path: file, name: basename(file), content })
+      } catch {
+        // Skip unreadable and non-UTF-8 files.
+      }
+    }
+    return runRegexWorker<FileSearchResult[]>({
+      kind: 'files',
+      files: workerFiles,
+      query: query.trim(),
+      flags,
+      maxMatchesPerFile: MAX_MATCHES_PER_FILE,
+      maxDocumentMatches: MAX_IN_DOCUMENT_MATCHES
+    })
+  }
 
   const results: FileSearchResult[] = []
   let searchedBytes = 0
@@ -553,11 +769,12 @@ async function loadExportDocument(window: BrowserWindow, html: string): Promise<
 async function embedLocalImages(
   html: string,
   documentPath: string | null
-): Promise<string> {
+): Promise<{ html: string; warnings: string[] }> {
   const sourcePattern = /(\bsrc=")([^"]+)(")/g
   const matches = Array.from(html.matchAll(sourcePattern))
   const replacements = new Map<string, string>()
   let totalBytes = 0
+  const warnings = new Set<string>()
 
   for (const match of matches) {
     const encodedSrc = match[2]
@@ -573,11 +790,17 @@ async function embedLocalImages(
           : src.startsWith('file:')
             ? fileURLToPath(src)
             : canonicalPath(src)
-      if (!path) continue
+      if (!path) {
+        warnings.add(src)
+        continue
+      }
       const authorized = assertPathAccess(path)
       const ext = extname(authorized).toLowerCase()
       const mime = IMAGE_MIME_TYPES[ext]
-      if (!mime) continue
+      if (!mime) {
+        warnings.add(src)
+        continue
+      }
       const handle = await fs.open(authorized, 'r')
       let data: Buffer
       try {
@@ -585,29 +808,34 @@ async function embedLocalImages(
       } finally {
         await handle.close()
       }
+      if (totalBytes + data.byteLength > MAX_EXPORT_IMAGE_BYTES) {
+        warnings.add(src)
+        continue
+      }
       totalBytes += data.byteLength
-      if (totalBytes > MAX_IMAGE_BYTES) throw new Error('Export images are too large')
       replacements.set(encodedSrc, `data:${mime};base64,${data.toString('base64')}`)
-    } catch (error) {
-      // A stale/missing image should render as broken in the export, not abort
-      // the entire document. Keep deliberate resource-limit failures fatal.
-      if (error instanceof Error && error.message === 'Export images are too large') throw error
+    } catch {
+      warnings.add(src)
     }
   }
 
-  return html.replace(sourcePattern, (whole, prefix: string, src: string, suffix: string) => {
-    const embedded = replacements.get(src)
-    return embedded ? `${prefix}${embedded}${suffix}` : whole
-  })
+  return {
+    html: html.replace(sourcePattern, (whole, prefix: string, src: string, suffix: string) => {
+      const embedded = replacements.get(src)
+      return embedded ? `${prefix}${embedded}${suffix}` : whole
+    }),
+    warnings: Array.from(warnings)
+  }
 }
 
 /** Resolve local image references to the constrained protocol for PDF/Print. */
 async function routeLocalImages(
   html: string,
   documentPath: string | null
-): Promise<string> {
+): Promise<{ html: string; warnings: string[] }> {
   const sourcePattern = /(\bsrc=")([^"]+)(")/g
   const replacements = new Map<string, string>()
+  const warnings = new Set<string>()
 
   for (const match of html.matchAll(sourcePattern)) {
     const encodedSrc = match[2]
@@ -623,22 +851,48 @@ async function routeLocalImages(
           : src.startsWith('file:')
             ? fileURLToPath(src)
             : canonicalPath(src)
-      if (!path) continue
+      if (!path) {
+        warnings.add(src)
+        continue
+      }
       const authorized = assertPathAccess(path)
-      if (!IMAGE_EXTENSIONS.has(extname(authorized).toLowerCase())) continue
+      if (!IMAGE_EXTENSIONS.has(extname(authorized).toLowerCase())) {
+        warnings.add(src)
+        continue
+      }
       const stat = await fs.stat(authorized)
-      if (!stat.isFile() || stat.size > MAX_IMAGE_BYTES) continue
+      if (!stat.isFile() || stat.size > MAX_IMAGE_BYTES) {
+        warnings.add(src)
+        continue
+      }
       replacements.set(encodedSrc, pathToAssetUrl(authorized))
     } catch {
-      // Match browser behavior: leave a stale/unauthorized image broken while
-      // continuing to export the rest of the document.
+      warnings.add(src)
     }
   }
 
-  return html.replace(sourcePattern, (whole, prefix: string, src: string, suffix: string) => {
-    const routed = replacements.get(src)
-    return routed ? `${prefix}${routed}${suffix}` : whole
-  })
+  return {
+    html: html.replace(sourcePattern, (whole, prefix: string, src: string, suffix: string) => {
+      const routed = replacements.get(src)
+      return routed ? `${prefix}${routed}${suffix}` : whole
+    }),
+    warnings: Array.from(warnings)
+  }
+}
+
+async function showExportWarnings(win: BrowserWindow | null, warnings: string[]): Promise<void> {
+  if (warnings.length === 0) return
+  const visible = warnings.slice(0, 10).map((value) => `• ${value.slice(0, 240)}`).join('\n')
+  const remaining = warnings.length > 10 ? `\n… +${warnings.length - 10}` : ''
+  const options = {
+    type: 'warning' as const,
+    buttons: [t('dialog.ok')],
+    defaultId: 0,
+    message: t('dialog.exportWarningsTitle'),
+    detail: `${t('dialog.exportWarningsDetail').replace('{count}', String(warnings.length))}\n${visible}${remaining}`
+  }
+  if (win) await dialog.showMessageBox(win, options)
+  else await dialog.showMessageBox(options)
 }
 
 function sanitizeFileName(name: string): string {
@@ -672,22 +926,35 @@ async function saveImage(payload: SaveImagePayload): Promise<SaveImageResult | n
   if (hasData === hasSource) throw new TypeError('Provide exactly one image source')
   if (!payload.docPath) throw new Error('Save the document before inserting images')
 
-  const docDir = dirname(assertPathAccess(payload.docPath))
+  const documentPath = assertPathAccess(payload.docPath)
+  const docDir = dirname(documentPath)
   let name: string
   let buffer: Buffer
   if (hasSource) {
     const sourcePath = assertPathAccess(payload.sourcePath as string)
-    name = sanitizeFileName(basename(sourcePath))
-    if (!IMAGE_EXTENSIONS.has(extname(name).toLowerCase())) throw new Error('Unsupported image type')
-    const existingRelative = relative(docDir, sourcePath)
-    if (existingRelative && !existingRelative.startsWith('..') && !isAbsolute(existingRelative)) {
-      return { src: existingRelative.split(sep).join('/') }
-    }
-    const handle = await fs.open(sourcePath, 'r')
     try {
-      buffer = (await readHandleSnapshot(handle, MAX_IMAGE_BYTES)).data
+      name = sanitizeFileName(basename(sourcePath))
+      if (!IMAGE_EXTENSIONS.has(extname(name).toLowerCase())) throw new Error('Unsupported image type')
+      const sourceStat = await fs.stat(sourcePath)
+      if (!sourceStat.isFile()) throw new Error('Image source is not a regular file')
+      if (sourceStat.size > MAX_IMAGE_BYTES) throw new Error('Image is too large')
+      const existingRelative = relative(docDir, sourcePath)
+      if (existingRelative && !existingRelative.startsWith('..') && !isAbsolute(existingRelative)) {
+        const grants = documentImageGrants.get(documentPath) ?? new Set<string>()
+        grants.add(sourcePath)
+        documentImageGrants.set(documentPath, grants)
+        return { src: existingRelative.split(sep).join('/') }
+      }
+      const handle = await fs.open(sourcePath, 'r')
+      try {
+        buffer = (await readHandleSnapshot(handle, MAX_IMAGE_BYTES)).data
+      } finally {
+        await handle.close()
+      }
     } finally {
-      await handle.close()
+      // Picker/drop grants are single-use. Relative images keep a narrower,
+      // document-scoped grant; copied images need no source grant afterward.
+      grantedFiles.delete(sourcePath)
     }
   } else {
     if (typeof payload.name !== 'string') throw new TypeError('Invalid clipboard image name')
@@ -701,8 +968,11 @@ async function saveImage(payload: SaveImagePayload): Promise<SaveImageResult | n
   if (buffer.byteLength > MAX_IMAGE_BYTES) throw new Error('Image is too large')
 
   // Save next to the document (Typora-like): <doc dir>/assets/<name>.
-  const targetDir = join(docDir, 'assets')
-  await fs.mkdir(targetDir, { recursive: true })
+  const configuredTargetDir = join(docDir, 'assets')
+  await fs.mkdir(configuredTargetDir, { recursive: true })
+  // Re-resolve after mkdir so a replaced/symlinked assets directory cannot
+  // redirect the write outside the document's granted asset capability.
+  const targetDir = assertPathAccess(configuredTargetDir)
   const targetName = await writeUniqueFile(targetDir, name, buffer)
   return { src: `assets/${targetName.replace(/\\/g, '/')}` }
 }
@@ -753,8 +1023,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     if (result.canceled || result.filePaths.length === 0) return { canceled: true }
     const path = result.filePaths[0]
     grantDocumentAccess(path)
-    const { content, version } = await readDocument(path)
-    return { path, content, version, canceled: false }
+    try {
+      const { content, version } = await readDocument(path)
+      return { path, content, version, canceled: false }
+    } catch (error) {
+      releaseDocumentAccess(path)
+      throw error
+    }
   })
 
   handle(
@@ -786,8 +1061,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       // after that confirmation and before the final rename.
       const baseline = selectedCurrentPath ? expectedVersion : await currentVersion(path)
       try {
-        const version = await atomicWriteFile(path, content, undefined, baseline, true)
+        const version = await atomicWriteFile(
+          path,
+          encodeDocument(content, expectedVersion?.utf8Bom === true),
+          undefined,
+          baseline,
+          true
+        )
         grantDocumentAccess(path)
+        grantReferencedImages(path, content)
         return { path, version, canceled: false, conflict: false }
       } catch (error) {
         if (error instanceof FileConflictError) return { path, canceled: false, conflict: true }
@@ -813,9 +1095,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return pathToAssetUrl(dirname(documentPath) + sep)
   })
 
-  handle(IPC.readFile, async (_event, path: string): Promise<ReadFileResult> =>
-    readDocument(assertPathAccess(path))
-  )
+  handle(IPC.readFile, async (_event, path: string): Promise<ReadFileResult> => {
+    const authorized = assertPathAccess(path)
+    grantDocumentAccess(authorized)
+    return readDocument(authorized)
+  })
 
   handle(IPC.writeFile, async (
     _event,
@@ -837,9 +1121,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       }
     }
     try {
+      const version = await atomicWriteFile(
+        path,
+        encodeDocument(content, expectedVersion?.utf8Bom === true),
+        undefined,
+        expectedVersion,
+        true
+      )
+      grantReferencedImages(path, content)
       return {
         conflict: false,
-        version: await atomicWriteFile(path, content, undefined, expectedVersion, true)
+        version
       }
     } catch (error) {
       if (error instanceof FileConflictError) return { conflict: true }
@@ -882,6 +1174,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return { path: result.filePaths[0], canceled: false }
   })
 
+  handle(IPC.releaseDocumentAccess, async (_event, path: string): Promise<void> => {
+    releaseDocumentAccess(path)
+  })
+
+  handle(IPC.releaseDirectoryAccess, async (_event, path: string): Promise<void> => {
+    releaseDirectoryAccess(path)
+  })
+
   handle(IPC.listMarkdown, async (_event, folderPath: string): Promise<FileEntry[]> =>
     listMarkdownRecursive(assertPathAccess(folderPath), 0)
   )
@@ -894,7 +1194,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ): Promise<SaveResult> => {
     html = assertTextPayload(html, 'HTML export')
     if (documentPath) documentPath = assertPathAccess(documentPath)
-    html = await embedLocalImages(html, documentPath)
+    const embedded = await embedLocalImages(html, documentPath)
+    html = embedded.html
     const win = getWindow()
     const options = {
       title: t('dialog.exportHtml'),
@@ -906,6 +1207,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       : await dialog.showSaveDialog(options)
     if (result.canceled || !result.filePath) return { canceled: true }
     const version = await atomicWriteFile(result.filePath, html)
+    await showExportWarnings(win, embedded.warnings)
     return { path: result.filePath, version, canceled: false }
   })
 
@@ -917,7 +1219,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ): Promise<SaveResult> => {
     html = assertTextPayload(html, 'PDF export')
     if (documentPath) documentPath = assertPathAccess(documentPath)
-    html = await routeLocalImages(html, documentPath)
+    const routed = await routeLocalImages(html, documentPath)
+    html = routed.html
     const win = getWindow()
     const options = {
       title: t('dialog.exportPdf'),
@@ -941,6 +1244,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         margins: { top: 0.5, bottom: 0.5, left: 0.5, right: 0.5 }
       })
       const version = await atomicWriteFile(result.filePath, data)
+      await showExportWarnings(win, routed.warnings)
       return { path: result.filePath, version, canceled: false }
     } finally {
       pdfWindow.destroy()
@@ -954,7 +1258,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ): Promise<void> => {
     html = assertTextPayload(html, 'print document')
     if (documentPath) documentPath = assertPathAccess(documentPath)
-    html = await routeLocalImages(html, documentPath)
+    const routed = await routeLocalImages(html, documentPath)
+    html = routed.html
     const printWindow = new BrowserWindow({
       show: false,
       webPreferences: { sandbox: true, javascript: false }
@@ -970,6 +1275,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
           }
         )
       })
+      await showExportWarnings(getWindow(), routed.warnings)
     } finally {
       printWindow.destroy()
     }
@@ -1000,8 +1306,27 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   handle(
     IPC.searchFiles,
-    async (_event, folderPath: string, query: string, flags: SearchFlags = {}): Promise<FileSearchResult[]> =>
-      searchFiles(assertPathAccess(folderPath), query, flags)
+    async (_event, folderPath: string, query: string, flags: SearchFlags = {}): Promise<FileSearchResult[]> => {
+      if (typeof query !== 'string' || !flags || typeof flags !== 'object') {
+        throw new TypeError('Invalid search request')
+      }
+      return searchFiles(assertPathAccess(folderPath), query, flags)
+    }
+  )
+
+  handle(
+    IPC.findRegexMatches,
+    async (
+      _event,
+      segments: RegexTextSegment[],
+      query: string,
+      flags: SearchFlags = {}
+    ): Promise<TextRange[]> => {
+      if (typeof query !== 'string' || !flags || typeof flags !== 'object') {
+        throw new TypeError('Invalid search request')
+      }
+      return findRegexMatches(segments, query, flags)
+    }
   )
 
   handle(IPC.confirmSave, async (_event, fileName: string) => {
@@ -1060,7 +1385,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   handle(IPC.loadRecoveryDraft, async (): Promise<RecoveryDraft | null> => {
     await recoveryQueue
     try {
-      const parsed = JSON.parse(await fs.readFile(recoveryPath(), 'utf8')) as unknown
+      const handle = await fs.open(recoveryPath(), 'r')
+      let data: Buffer
+      try {
+        data = (await readHandleSnapshot(handle, MAX_RECOVERY_FILE_BYTES)).data
+      } finally {
+        await handle.close()
+      }
+      const parsed = JSON.parse(decodeUtf8Document(data).content) as unknown
       if (!isRecoveryDraft(parsed)) return null
       if (parsed.filePath) grantDocumentAccess(parsed.filePath)
       return parsed
@@ -1071,9 +1403,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   handle(IPC.saveRecoveryDraft, async (_event, draft: RecoveryDraft): Promise<void> => {
     if (!isRecoveryDraft(draft)) throw new TypeError('Invalid recovery draft')
+    const canonicalFilePath = draft.filePath ? assertPathAccess(draft.filePath) : null
+    const serialized = JSON.stringify({ ...draft, filePath: canonicalFilePath })
+    if (Buffer.byteLength(serialized) > MAX_RECOVERY_FILE_BYTES) {
+      throw new Error('Recovery draft is too large')
+    }
     await queueRecovery(async () => {
       await fs.mkdir(app.getPath('userData'), { recursive: true })
-      await atomicWriteFile(recoveryPath(), JSON.stringify(draft), 0o600)
+      await atomicWriteFile(recoveryPath(), serialized, 0o600)
       await fs.chmod(recoveryPath(), 0o600).catch(() => undefined)
     })
   })

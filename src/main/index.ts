@@ -14,7 +14,8 @@ if (portableDir) {
   app.setPath('userData', join(portableDir, 'InkMarkData'))
 }
 const selfTestUserData = process.env['INKMARK_SELFTEST_USER_DATA']
-if (process.env['INKMARK_SELFTEST'] === '1' && selfTestUserData) {
+const selfTestEnabled = !app.isPackaged && process.env['INKMARK_SELFTEST'] === '1'
+if (selfTestEnabled && selfTestUserData) {
   app.setPath('userData', selfTestUserData)
 }
 
@@ -59,6 +60,19 @@ function isAllowedExternalUrl(value: string): boolean {
   }
 }
 
+function trustedDevelopmentRendererUrl(value: string | undefined): string | null {
+  if (app.isPackaged || !value) return null
+  try {
+    const url = new URL(value)
+    const localHosts = new Set(['localhost', '127.0.0.1', '[::1]'])
+    return ['http:', 'https:'].includes(url.protocol) && localHosts.has(url.hostname)
+      ? url.href
+      : null
+  } catch {
+    return null
+  }
+}
+
 function createWindow(): void {
   rendererReady = false
   rendererGone = false
@@ -76,6 +90,11 @@ function createWindow(): void {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      // The preload can only enable synthetic drop paths when the main
+      // process has independently approved development self-test mode.
+      additionalArguments: [
+        selfTestEnabled ? '--inkmark-selftest-authorized' : '--inkmark-selftest-disabled'
+      ],
       // Skip loading the spellchecker dictionary at startup.
       spellcheck: false
     }
@@ -107,7 +126,7 @@ function createWindow(): void {
   })
 
   // Self-test harness (headless verification), only when INKMARK_SELFTEST=1.
-  if (process.env['INKMARK_SELFTEST'] === '1') {
+  if (selfTestEnabled) {
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(() => {
         void import('./selftest').then(({ runSelfTest }) => runSelfTest(mainWindow as BrowserWindow))
@@ -128,8 +147,9 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  if (process.env['ELECTRON_RENDERER_URL']) {
-    void mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+  const developmentUrl = trustedDevelopmentRendererUrl(process.env['ELECTRON_RENDERER_URL'])
+  if (developmentUrl) {
+    void mainWindow.loadURL(developmentUrl)
   } else {
     void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }

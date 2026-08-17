@@ -13,7 +13,7 @@ import { EditorContextMenu } from './components/EditorContextMenu'
 import { FindBar } from './components/FindBar'
 import { buildHtmlDocument } from './lib/export'
 import { appendImage } from './lib/commands'
-import { findTextMatches, selectMatch } from './lib/search'
+import { findTextMatchesAsync, selectMatch } from './lib/search'
 import { useResizableWidth } from './lib/useResizableWidth'
 import { usePersistentBoolean } from './lib/usePersistentBoolean'
 import {
@@ -73,6 +73,8 @@ export default function App(): React.JSX.Element {
   const fileVersionRef = useRef<FileVersion | null>(null)
   const foldersRef = useRef(folders)
   foldersRef.current = folders
+  const openFilesRef = useRef(openFiles)
+  openFilesRef.current = openFiles
   const welcomedRef = useRef(false)
   const recoveryStartedRef = useRef(false)
   const restoringDraftRef = useRef(false)
@@ -295,37 +297,43 @@ export default function App(): React.JSX.Element {
     [reportSaveError, t]
   )
 
-  // Keep one private, atomically-written recovery snapshot. This is recovery
-  // data, not the user's saved document, and is removed after save/discard.
+  const persistRecoveryDraft = useCallback(async (): Promise<void> => {
+    if (!hasUnsavedChanges()) {
+      await clearRecoveryDraft()
+      return
+    }
+    try {
+      await window.api.saveRecoveryDraft({
+        filePath: filePathRef.current,
+        content: getActiveContent(),
+        cleanContent: cleanContentRef.current ?? '',
+        fileVersion: fileVersionRef.current,
+        sourceMode: sourceModeRef.current,
+        updatedAt: Date.now()
+      })
+      recoveryErrorShownRef.current = false
+    } catch (error) {
+      console.error('Failed to save recovery draft', error)
+      if (!recoveryErrorShownRef.current) {
+        recoveryErrorShownRef.current = true
+        void window.api.showError(t('error.recoveryFailed'), String(error))
+      }
+    }
+  }, [clearRecoveryDraft, getActiveContent, hasUnsavedChanges, t])
+
+  // Save shortly after editing stops, plus a five-second maximum wait so a
+  // continuously typed document still receives fresh crash-recovery points.
   useEffect(() => {
     if (!recoveryReady) return
-    const timer = window.setTimeout(() => {
-      if (!hasUnsavedChanges()) {
-        void clearRecoveryDraft()
-        return
-      }
-      void window.api
-        .saveRecoveryDraft({
-          filePath: filePathRef.current,
-          content: getActiveContent(),
-          cleanContent: cleanContentRef.current ?? '',
-          fileVersion: fileVersionRef.current,
-          sourceMode: sourceModeRef.current,
-          updatedAt: Date.now()
-        })
-        .then(() => {
-          recoveryErrorShownRef.current = false
-        })
-        .catch((error) => {
-          console.error('Failed to save recovery draft', error)
-          if (!recoveryErrorShownRef.current) {
-            recoveryErrorShownRef.current = true
-            void window.api.showError(t('error.recoveryFailed'), String(error))
-          }
-        })
-    }, 500)
+    const timer = window.setTimeout(() => void persistRecoveryDraft(), 500)
     return () => window.clearTimeout(timer)
-  }, [dirty, filePath, markdown, sourceMode, recoveryReady, clearRecoveryDraft, getActiveContent, hasUnsavedChanges, t])
+  }, [dirty, filePath, markdown, sourceMode, recoveryReady, persistRecoveryDraft])
+
+  useEffect(() => {
+    if (!recoveryReady) return
+    const timer = window.setInterval(() => void persistRecoveryDraft(), 5_000)
+    return () => window.clearInterval(timer)
+  }, [recoveryReady, persistRecoveryDraft])
 
   const handleEditorReady = useCallback((editor: Editor) => {
     editorRef.current = editor
@@ -521,7 +529,12 @@ export default function App(): React.JSX.Element {
     try {
       const result = await window.api.openFileDialog()
       if (!result.canceled && result.path && result.content != null) {
-        if (!(await confirmBeforeReplace())) return
+        if (!(await confirmBeforeReplace())) {
+          if (result.path !== filePathRef.current && !openFilesRef.current.includes(result.path)) {
+            await window.api.releaseDocumentAccess(result.path).catch(() => undefined)
+          }
+          return
+        }
         // The selected file may be the current document and may just have been
         // saved by the confirmation flow, so read it again after confirmation.
         const latest = await window.api.readFile(result.path)
@@ -536,7 +549,12 @@ export default function App(): React.JSX.Element {
   const openPath = useCallback(
     async (path: string) => {
       try {
-        if (!(await confirmBeforeReplace())) return
+        if (!(await confirmBeforeReplace())) {
+          if (path !== filePathRef.current && !openFilesRef.current.includes(path)) {
+            await window.api.releaseDocumentAccess(path).catch(() => undefined)
+          }
+          return
+        }
         const result = await window.api.readFile(path)
         await loadDocument(path, result.content, result.version)
       } catch (error) {
@@ -573,6 +591,9 @@ export default function App(): React.JSX.Element {
 
   const closeFolder = useCallback((path: string) => {
     setFolders((prev) => prev.filter((folder) => folder.path !== path))
+    void window.api.releaseDirectoryAccess(path).catch((error) =>
+      console.error('Failed to release folder access', error)
+    )
     // Keep the current document reachable: it becomes a loose file.
     const current = filePathRef.current
     if (current && (current.startsWith(path + '/') || current.startsWith(path + '\\'))) {
@@ -581,6 +602,13 @@ export default function App(): React.JSX.Element {
   }, [])
 
   const closeAllFolders = useCallback(() => {
+    const current = filePathRef.current
+    if (current) setOpenFiles((prev) => (prev.includes(current) ? prev : [...prev, current]))
+    for (const folder of foldersRef.current) {
+      void window.api.releaseDirectoryAccess(folder.path).catch((error) =>
+        console.error('Failed to release folder access', error)
+      )
+    }
     setFolders([])
   }, [])
 
@@ -593,7 +621,7 @@ export default function App(): React.JSX.Element {
         if (matchIndex >= 0) {
           const editor = editorRef.current
           if (editor) {
-            const matches = findTextMatches(editor, query, flags)
+            const matches = await findTextMatchesAsync(editor, query, flags)
             const match = matches[matchIndex] ?? matches[matches.length - 1]
             if (match) selectMatch(editor, match)
           }
@@ -665,6 +693,9 @@ export default function App(): React.JSX.Element {
       const isCurrent = filePathRef.current === path
       if (isCurrent && !(await confirmBeforeReplace())) return
       setOpenFiles((prev) => prev.filter((p) => p !== path))
+      await window.api.releaseDocumentAccess(path).catch((error) =>
+        console.error('Failed to release document access', error)
+      )
       if (isCurrent) {
         // Close the document: reset to a new untitled document.
         setFilePath(null)
