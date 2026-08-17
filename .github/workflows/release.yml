@@ -44,6 +44,10 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7
+        with:
+          # build/icon.png is tracked with Git LFS; the raw pointer is not a
+          # valid input for electron-builder's Windows icon converter.
+          lfs: true
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -66,6 +70,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Verify build icon
+        run: node -e "const fs = require('fs'); const icon = fs.readFileSync('build/icon.png'); if (icon.readUInt32BE(0) !== 0x89504e47 || icon.readUInt32BE(4) !== 0x0d0a1a0a) throw new Error('build/icon.png is not a hydrated PNG file');"
 
       - name: Build installer
         run: npm run ${{ matrix.script }}

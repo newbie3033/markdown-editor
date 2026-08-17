@@ -16,6 +16,10 @@ files:
 asar: true
 npmRebuild: false
 
+# GitHub Actions uploads the finished artifacts with `gh release`.
+# Do not let electron-builder implicitly publish when it sees a CI tag.
+publish: null
+
 # Electron fuses: shave startup time and harden the packaged binary.
 electronFuses:
   runAsNode: false
