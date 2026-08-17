@@ -34,6 +34,7 @@ import {
   type ReadFileResult,
   type RecoveryDraft,
   type DroppedPathResult,
+  type RemoteImageResult,
   type SaveImagePayload,
   type SaveImageResult,
   type SaveResult,
@@ -59,6 +60,9 @@ const MAX_SEARCH_TOTAL_BYTES = 32 * 1024 * 1024
 const MAX_OPEN_FILE_BYTES = 64 * 1024 * 1024
 const MAX_IMAGE_BYTES = 32 * 1024 * 1024
 const MAX_EXPORT_IMAGE_BYTES = 128 * 1024 * 1024
+const MAX_REMOTE_IMAGE_URL_LENGTH = 4096
+const MAX_REMOTE_REDIRECTS = 3
+const REMOTE_IMAGE_TIMEOUT_MS = 10_000
 const MAX_RECOVERY_CONTENT_BYTES = MAX_OPEN_FILE_BYTES
 const MAX_RECOVERY_FILE_BYTES = MAX_OPEN_FILE_BYTES * 2 + 1024 * 1024
 const RECOVERY_FILE = 'recovery-draft.json'
@@ -76,6 +80,7 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
   '.ico': 'image/x-icon',
   '.avif': 'image/avif'
 }
+const IMAGE_MIME_VALUES = new Set(Object.values(IMAGE_MIME_TYPES))
 
 const grantedFiles = new Set<string>()
 const grantedDirectories = new Set<string>()
@@ -173,6 +178,104 @@ function localImagePath(value: string, documentPath: string): string | null {
   }
   if (/^[A-Za-z]:[\\/]/.test(decoded) || isAbsolute(decoded)) return canonicalPath(decoded)
   return canonicalPath(resolve(dirname(documentPath), decoded.replace(/\\/g, sep)))
+}
+
+function normalizeRemoteImageUrl(value: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new TypeError('Invalid remote image URL')
+  }
+  const source = value.trim()
+  if (source.length > MAX_REMOTE_IMAGE_URL_LENGTH) throw new Error('Remote image URL is too long')
+  const url = new URL(source)
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+    throw new Error('Only credential-free HTTP(S) image URLs are supported')
+  }
+  return url.href
+}
+
+function remoteImageMime(value: string | null, source: string): string | null {
+  const mime = value?.split(';', 1)[0]?.trim().toLowerCase() ?? ''
+  if (IMAGE_MIME_VALUES.has(mime)) return mime
+  if (mime === 'image/jpg') return 'image/jpeg'
+  if (!mime || mime === 'application/octet-stream') {
+    try {
+      return IMAGE_MIME_TYPES[extname(new URL(source).pathname).toLowerCase()] ?? null
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+async function readRemoteResponse(response: Response): Promise<Buffer> {
+  const contentLength = Number(response.headers.get('content-length') ?? '')
+  if (Number.isFinite(contentLength) && contentLength > MAX_IMAGE_BYTES) {
+    throw new Error('Remote image is too large')
+  }
+
+  if (!response.body) {
+    const data = Buffer.from(await response.arrayBuffer())
+    if (data.byteLength > MAX_IMAGE_BYTES) throw new Error('Remote image is too large')
+    return data
+  }
+
+  const reader = response.body.getReader()
+  const chunks: Buffer[] = []
+  let total = 0
+  try {
+    while (true) {
+      const next = await reader.read()
+      if (next.done) break
+      total += next.value.byteLength
+      if (total > MAX_IMAGE_BYTES) {
+        await reader.cancel()
+        throw new Error('Remote image is too large')
+      }
+      chunks.push(Buffer.from(next.value))
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return Buffer.concat(chunks, total)
+}
+
+/** Fetch a remote image only after an explicit user/export action. */
+async function fetchRemoteImage(source: string): Promise<RemoteImageResult> {
+  let url = normalizeRemoteImageUrl(source)
+  for (let redirect = 0; redirect <= MAX_REMOTE_REDIRECTS; redirect += 1) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), REMOTE_IMAGE_TIMEOUT_MS)
+    try {
+      const response = await net.fetch(url, {
+        method: 'GET',
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: {
+          Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*;q=0.8'
+        }
+      })
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        if (redirect === MAX_REMOTE_REDIRECTS) throw new Error('Too many remote image redirects')
+        const location = response.headers.get('location')
+        if (!location) throw new Error('Remote image redirect has no location')
+        url = normalizeRemoteImageUrl(new URL(location, url).href)
+        continue
+      }
+      if (!response.ok) throw new Error(`Remote image request failed (${response.status})`)
+      const mime = remoteImageMime(response.headers.get('content-type'), url)
+      if (!mime) throw new Error('Remote response is not a supported image')
+      const data = await readRemoteResponse(response)
+      if (data.byteLength === 0) throw new Error('Remote image is empty')
+      return {
+        dataUrl: `data:${mime};base64,${data.toString('base64')}`,
+        bytes: data.byteLength,
+        mime
+      }
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+  throw new Error('Remote image request failed')
 }
 
 /** Grant only local image files explicitly referenced by the opened Markdown. */
@@ -766,6 +869,63 @@ async function loadExportDocument(window: BrowserWindow, html: string): Promise<
   }
 }
 
+function isRemoteImageSource(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim())
+}
+
+function remoteImageSources(html: string): string[] {
+  const sources = new Set<string>()
+  const sourcePattern = /\bsrc="([^"]+)"/g
+  for (const match of html.matchAll(sourcePattern)) {
+    const src = decodeHtmlAttribute(match[1])
+    if (isRemoteImageSource(src)) sources.add(src)
+  }
+  return Array.from(sources)
+}
+
+async function embedRemoteImages(html: string): Promise<{ html: string; warnings: string[] }> {
+  const sourcePattern = /(\bsrc=")([^"]+)(")/g
+  const replacements = new Map<string, string>()
+  const fetched = new Map<string, RemoteImageResult | null>()
+  const warnings = new Set<string>()
+  let totalBytes = 0
+
+  for (const match of html.matchAll(sourcePattern)) {
+    const encodedSrc = match[2]
+    if (replacements.has(encodedSrc)) continue
+    const src = decodeHtmlAttribute(encodedSrc)
+    if (!isRemoteImageSource(src)) continue
+    if (fetched.has(src)) {
+      const previous = fetched.get(src)
+      if (previous) replacements.set(encodedSrc, previous.dataUrl)
+      else warnings.add(src)
+      continue
+    }
+    try {
+      const remote = await fetchRemoteImage(src)
+      if (totalBytes + remote.bytes > MAX_EXPORT_IMAGE_BYTES) {
+        fetched.set(src, null)
+        warnings.add(src)
+        continue
+      }
+      fetched.set(src, remote)
+      totalBytes += remote.bytes
+      replacements.set(encodedSrc, remote.dataUrl)
+    } catch {
+      fetched.set(src, null)
+      warnings.add(src)
+    }
+  }
+
+  return {
+    html: html.replace(sourcePattern, (whole, prefix: string, src: string, suffix: string) => {
+      const embedded = replacements.get(src)
+      return embedded ? `${prefix}${embedded}${suffix}` : whole
+    }),
+    warnings: Array.from(warnings)
+  }
+}
+
 async function embedLocalImages(
   html: string,
   documentPath: string | null
@@ -890,6 +1050,27 @@ async function showExportWarnings(win: BrowserWindow | null, warnings: string[])
     defaultId: 0,
     message: t('dialog.exportWarningsTitle'),
     detail: `${t('dialog.exportWarningsDetail').replace('{count}', String(warnings.length))}\n${visible}${remaining}`
+  }
+  if (win) await dialog.showMessageBox(win, options)
+  else await dialog.showMessageBox(options)
+}
+
+async function showRemoteImageNotice(
+  win: BrowserWindow | null,
+  kind: 'html' | 'pdf',
+  count: number
+): Promise<void> {
+  if (count === 0) return
+  const isHtml = kind === 'html'
+  const options = {
+    type: 'info' as const,
+    buttons: [t('dialog.ok')],
+    defaultId: 0,
+    message: t(isHtml ? 'dialog.remoteHtmlTitle' : 'dialog.remotePdfTitle'),
+    detail: t(isHtml ? 'dialog.remoteHtmlDetail' : 'dialog.remotePdfDetail').replace(
+      '{count}',
+      String(count)
+    )
   }
   if (win) await dialog.showMessageBox(win, options)
   else await dialog.showMessageBox(options)
@@ -1194,6 +1375,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ): Promise<SaveResult> => {
     html = assertTextPayload(html, 'HTML export')
     if (documentPath) documentPath = assertPathAccess(documentPath)
+    const remoteSources = remoteImageSources(html)
     const embedded = await embedLocalImages(html, documentPath)
     html = embedded.html
     const win = getWindow()
@@ -1208,6 +1390,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     if (result.canceled || !result.filePath) return { canceled: true }
     const version = await atomicWriteFile(result.filePath, html)
     await showExportWarnings(win, embedded.warnings)
+    await showRemoteImageNotice(win, 'html', remoteSources.length)
     return { path: result.filePath, version, canceled: false }
   })
 
@@ -1219,8 +1402,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ): Promise<SaveResult> => {
     html = assertTextPayload(html, 'PDF export')
     if (documentPath) documentPath = assertPathAccess(documentPath)
-    const routed = await routeLocalImages(html, documentPath)
-    html = routed.html
     const win = getWindow()
     const options = {
       title: t('dialog.exportPdf'),
@@ -1231,6 +1412,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       ? await dialog.showSaveDialog(win, options)
       : await dialog.showSaveDialog(options)
     if (result.canceled || !result.filePath) return { canceled: true }
+
+    const remoteSources = remoteImageSources(html)
+    await showRemoteImageNotice(win, 'pdf', remoteSources.length)
+    const routed = await routeLocalImages(html, documentPath)
+    const remote = await embedRemoteImages(routed.html)
+    html = remote.html
+    const warnings = [...routed.warnings, ...remote.warnings]
 
     const pdfWindow = new BrowserWindow({
       show: false,
@@ -1244,7 +1432,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         margins: { top: 0.5, bottom: 0.5, left: 0.5, right: 0.5 }
       })
       const version = await atomicWriteFile(result.filePath, data)
-      await showExportWarnings(win, routed.warnings)
+      await showExportWarnings(win, warnings)
       return { path: result.filePath, version, canceled: false }
     } finally {
       pdfWindow.destroy()
@@ -1258,8 +1446,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ): Promise<void> => {
     html = assertTextPayload(html, 'print document')
     if (documentPath) documentPath = assertPathAccess(documentPath)
+    const win = getWindow()
+    const remoteSources = remoteImageSources(html)
+    await showRemoteImageNotice(win, 'pdf', remoteSources.length)
     const routed = await routeLocalImages(html, documentPath)
-    html = routed.html
+    const remote = await embedRemoteImages(routed.html)
+    html = remote.html
+    const warnings = [...routed.warnings, ...remote.warnings]
     const printWindow = new BrowserWindow({
       show: false,
       webPreferences: { sandbox: true, javascript: false }
@@ -1275,7 +1468,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
           }
         )
       })
-      await showExportWarnings(getWindow(), routed.warnings)
+      await showExportWarnings(win, warnings)
     } finally {
       printWindow.destroy()
     }
@@ -1283,6 +1476,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   handle(IPC.saveImage, async (_event, payload: SaveImagePayload): Promise<SaveImageResult | null> =>
     saveImage(payload)
+  )
+
+  handle(IPC.loadRemoteImage, async (_event, url: string): Promise<RemoteImageResult> =>
+    fetchRemoteImage(url)
   )
 
   handle(IPC.pickImage, async () => {

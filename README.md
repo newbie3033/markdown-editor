@@ -17,7 +17,8 @@ engine), packaged for Windows, macOS, and Linux with **electron-builder**.
   insert it. Images are kept in the document's `assets/` folder and Markdown
   stores a portable relative path; files already below the document directory
   are referenced relatively without duplication. An untitled document asks to
-  be saved first.
+  be saved first. Remote HTTP(S) images are blocked until explicitly loaded;
+  the editor explains that loading contacts the image server.
 - **Documents: drag to open** — drop a `.md`/`.markdown`/`.txt` file anywhere in
   the window (or into the editor) to open it; drop a **folder** to open it in
   the sidebar. Paths are resolved via Electron's `webUtils.getPathForFile`.
@@ -65,8 +66,9 @@ engine), packaged for Windows, macOS, and Linux with **electron-builder**.
   Large files/images and expensive regex shapes are rejected before they can
   exhaust the Electron main process.
 - **Private-by-default documents** — remote HTTP(S) images are not loaded from
-  opened or exported Markdown. This prevents a document from silently pinging
-  a tracking server.
+  opened Markdown. HTML export keeps remote URLs and warns that the result needs
+  a network connection; PDF/Print explicitly fetches and embeds them with
+  bounded size, redirect, and timeout limits, reporting failures.
 - **Predictable and safe image paths** — local images are imported to the
   adjacent `assets/` folder and rendered through a capability-checked custom
   protocol instead of direct `file://` access. Clipboard images use the same

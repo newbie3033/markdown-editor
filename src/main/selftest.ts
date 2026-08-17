@@ -3,6 +3,7 @@
 
 import { app, BrowserWindow, clipboard, dialog, Menu, shell } from 'electron'
 import { appendFileSync, existsSync, promises as fs, writeFileSync, writeSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { basename, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
@@ -1219,6 +1220,107 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     } finally {
       dialog.showSaveDialog = originalShowSave
     }
+
+    // 13a. Remote images are opt-in in the editor, retained in HTML, and
+    // fetched/embedded for PDF export.
+    let remoteRequestCount = 0
+    const remoteServer = createServer((_request, response) => {
+      remoteRequestCount += 1
+      response.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.byteLength })
+      response.end(png)
+    })
+    await new Promise<void>((resolve, reject) => {
+      remoteServer.once('error', reject)
+      remoteServer.listen(0, '127.0.0.1', () => resolve())
+    })
+    try {
+      const address = remoteServer.address()
+      if (!address || typeof address === 'string') throw new Error('Remote self-test server has no port')
+      const remoteUrl = `http://127.0.0.1:${address.port}/remote.png`
+      const remoteDocPath = join(TEST_DIR, 'docs', 'remote-test.md')
+      await fs.writeFile(remoteDocPath, `# Remote Test\n\n![remote](${remoteUrl})\n`)
+      win.webContents.send(IPC.openPath, remoteDocPath)
+      await sleep(1000)
+      const blockedRemote = (await js(`(async () => {
+        const panel = document.querySelector('.inkmark-remote-image')
+        const img = document.querySelector('.ProseMirror img:not(.ProseMirror-separator)')
+        return {
+          blocked: !!panel && (img?.hidden ?? false),
+          requests: ${JSON.stringify(remoteRequestCount)},
+          markdown: window.__inkmarkGetMarkdown()
+        }
+      })()`)) as { blocked?: boolean; requests?: number; markdown?: string }
+      check(
+        'remote image is blocked until explicitly loaded',
+        blockedRemote?.blocked === true && blockedRemote.requests === 0 && blockedRemote.markdown?.includes(remoteUrl) === true,
+        JSON.stringify(blockedRemote)
+      )
+
+      const loadedRemote = (await js(`(async () => {
+        document.querySelector('.inkmark-remote-image-button')?.click()
+        for (let i = 0; i < 40; i += 1) {
+          await new Promise(r => setTimeout(r, 100))
+          const img = document.querySelector('.ProseMirror img:not(.ProseMirror-separator)')
+          if (img?.src.startsWith('data:image/png;base64,') && img.naturalWidth > 0) {
+            return {
+              loaded: true,
+              src: img.src,
+              panelHidden: document.querySelector('.inkmark-remote-image')?.hasAttribute('hidden') === true,
+              markdown: window.__inkmarkGetMarkdown()
+            }
+          }
+        }
+        const img = document.querySelector('.ProseMirror img:not(.ProseMirror-separator)')
+        return {
+          loaded: false,
+          src: img?.src || '',
+          panelHidden: document.querySelector('.inkmark-remote-image')?.hasAttribute('hidden') === true,
+          markdown: window.__inkmarkGetMarkdown()
+        }
+      })()`)) as { loaded?: boolean; src?: string; panelHidden?: boolean; markdown?: string }
+      check(
+        'explicit remote image load uses a validated data URL',
+        loadedRemote?.loaded === true &&
+          loadedRemote.panelHidden === true &&
+          loadedRemote.markdown?.includes(remoteUrl) === true &&
+          remoteRequestCount === 1,
+        JSON.stringify({ ...loadedRemote, requests: remoteRequestCount })
+      )
+
+      const remoteOriginalShowSave = dialog.showSaveDialog.bind(dialog)
+      dialog.showSaveDialog = (async (_win, options) => ({
+        canceled: false,
+        filePath: join(EXPORT_DIR, basename(options?.defaultPath ?? 'document.html'))
+      })) as typeof dialog.showSaveDialog
+      try {
+        const remoteHtml = (await js(`window.__inkmarkBuildExportHtml()`)) as string
+        await js(`window.api.exportHtml('remote-test', ${JSON.stringify(remoteHtml)}, ${JSON.stringify(remoteDocPath)})`)
+        const remoteHtmlContent = await fs.readFile(join(EXPORT_DIR, 'remote-test.html'), 'utf8')
+        check(
+          'HTML export retains remote image URL without fetching it',
+          remoteHtmlContent.includes(remoteUrl) &&
+            remoteHtmlContent.includes('img-src data: http: https:') &&
+            remoteRequestCount === 1,
+          JSON.stringify({ requests: remoteRequestCount, len: remoteHtmlContent.length })
+        )
+
+        await js(`window.api.exportPdf('remote-test', ${JSON.stringify(remoteHtml)}, ${JSON.stringify(remoteDocPath)})`)
+        const remotePdf = await fs.readFile(join(EXPORT_DIR, 'remote-test.pdf')).catch(() => null)
+        check(
+          'PDF export fetches and embeds remote image',
+          remotePdf != null && remotePdf.length > 1000 && remotePdf.subarray(0, 4).toString() === '%PDF' && remoteRequestCount === 2,
+          JSON.stringify({ requests: remoteRequestCount, len: remotePdf?.length ?? 0 })
+        )
+      } finally {
+        dialog.showSaveDialog = remoteOriginalShowSave
+      }
+    } finally {
+      await new Promise<void>((resolve) => remoteServer.close(() => resolve()))
+    }
+
+    // Restore the export document for the following status-bar assertions.
+    win.webContents.send(IPC.openPath, join(TEST_DIR, 'docs', 'export-test.md'))
+    await sleep(800)
 
     // 13b. Status bar path copy → clipboard + toast feedback.
     const pathCopy = (await js(`(async () => {

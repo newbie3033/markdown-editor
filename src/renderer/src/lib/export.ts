@@ -14,7 +14,7 @@ export function buildHtmlDocument(bodyHtml: string, title: string): string {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: inkmark-asset:" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: http: https: inkmark-asset:" />
 <title>${safeTitle}</title>
 <style>
 ${themeCss}

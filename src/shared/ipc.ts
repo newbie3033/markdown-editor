@@ -73,6 +73,13 @@ export interface SaveImageResult {
   src: string
 }
 
+export interface RemoteImageResult {
+  /** A bounded, validated image returned as a data URL for explicit display. */
+  dataUrl: string
+  bytes: number
+  mime: string
+}
+
 export interface PickImageResult {
   path?: string
   canceled: boolean
@@ -206,6 +213,7 @@ export const IPC = {
   exportPdf: 'export:pdf',
   exportPrint: 'export:print',
   saveImage: 'image:save',
+  loadRemoteImage: 'image:load-remote',
   pickImage: 'image:pick',
   searchFiles: 'search:files',
   findRegexMatches: 'search:regex-matches',
@@ -268,6 +276,7 @@ export interface InkMarkApi {
   exportPdf(defaultName: string, html: string, documentPath: string | null): Promise<SaveResult>
   exportPrint(html: string, documentPath: string | null): Promise<void>
   saveImage(payload: SaveImagePayload): Promise<SaveImageResult | null>
+  loadRemoteImage(url: string): Promise<RemoteImageResult>
   pickImage(): Promise<PickImageResult>
   searchFiles(folderPath: string, query: string, flags?: SearchFlags): Promise<FileSearchResult[]>
   findRegexMatches(segments: RegexTextSegment[], query: string, flags?: SearchFlags): Promise<TextRange[]>

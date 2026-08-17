@@ -10,6 +10,7 @@ import {
   type Lang,
   type SaveImagePayload,
   type SaveImageResult,
+  type RemoteImageResult,
   type PickImageResult,
   type FileSearchResult,
   type SaveChoice,
@@ -90,6 +91,9 @@ const api: InkMarkApi = {
 
   saveImage: (payload: SaveImagePayload): Promise<SaveImageResult | null> =>
     ipcRenderer.invoke(IPC.saveImage, payload),
+
+  loadRemoteImage: (url: string): Promise<RemoteImageResult> =>
+    ipcRenderer.invoke(IPC.loadRemoteImage, url),
 
   pickImage: (): Promise<PickImageResult> => ipcRenderer.invoke(IPC.pickImage),
 
