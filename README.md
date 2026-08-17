@@ -14,10 +14,10 @@ engine), packaged for Windows, macOS, and Linux with **electron-builder**.
   copies the code to the clipboard.
 - **Source code mode** — toggle with `Ctrl+/` to see and edit raw Markdown.
 - **Images: paste & drag-drop** — paste a screenshot or drop an image file to
-  copy it next to the document (`<doc dir>/assets/`) and insert a relative
-  reference; without an open document the image is stored in the app data
-  folder. Relative paths resolve correctly in the editor and in HTML/PDF
-  exports.
+  insert it. Images are kept in the document's `assets/` folder and Markdown
+  stores a portable relative path; files already below the document directory
+  are referenced relatively without duplication. An untitled document asks to
+  be saved first.
 - **Documents: drag to open** — drop a `.md`/`.markdown`/`.txt` file anywhere in
   the window (or into the editor) to open it; drop a **folder** to open it in
   the sidebar. Paths are resolved via Electron's `webUtils.getPathForFile`.
@@ -55,11 +55,24 @@ engine), packaged for Windows, macOS, and Linux with **electron-builder**.
   `Ctrl+Shift+S`, `Ctrl+N`).
 - **Safe saves and crash recovery** — document writes use a flushed temporary
   file plus atomic rename, saves are serialized, and changes made by another
-  program are never overwritten silently. Unsaved work is periodically stored
-  in a private `recovery-draft.json` under Electron's `userData` directory and
-  restored on the next launch; the draft is removed after save or discard.
-- **Export** — HTML, PDF, and Print (with relative images/links rewritten to
-  absolute paths).
+  program are detected both before replacement and by a live file watcher.
+  The previous revision is kept privately under Electron's `userData/backups`
+  directory. Unsaved work is periodically stored in a private
+  `recovery-draft.json`; startup verifies it against the disk file and asks
+  before restoring it, while a successful save clears it immediately.
+- **Bounded file access** — renderer file operations are limited to files and
+  folders the user selected, opened through the OS, or dragged into the app.
+  Large files/images and expensive regex shapes are rejected before they can
+  exhaust the Electron main process.
+- **Private-by-default documents** — remote HTTP(S) images are not loaded from
+  opened or exported Markdown. This prevents a document from silently pinging
+  a tracking server.
+- **Predictable and safe image paths** — local images are imported to the
+  adjacent `assets/` folder and rendered through a capability-checked custom
+  protocol instead of direct `file://` access. Clipboard images use the same
+  managed attachment flow.
+- **Export** — HTML, PDF, and Print, with local images embedded so exported
+  documents do not depend on paths from the source machine.
 - **中文 / English UI** — switch via *View → Language* or the status bar button;
   the choice persists and the app follows the system language on first launch.
 - **Light & dark themes** — Typora/GitHub-inspired styling.

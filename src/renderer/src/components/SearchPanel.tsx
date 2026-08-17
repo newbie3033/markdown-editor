@@ -6,9 +6,10 @@ import { SearchFlagsToggle } from './SearchFlagsToggle'
 interface SearchPanelProps {
   folderPaths: string[]
   onOpenResult: (path: string, matchIndex: number, query: string, flags: SearchFlags) => void
+  onError: (error: unknown) => void
 }
 
-export function SearchPanel({ folderPaths, onOpenResult }: SearchPanelProps): React.JSX.Element {
+export function SearchPanel({ folderPaths, onOpenResult, onError }: SearchPanelProps): React.JSX.Element {
   const { t } = useI18n()
   const [query, setQuery] = useState('')
   const [flags, setFlags] = useState<SearchFlags>({})
@@ -32,10 +33,14 @@ export function SearchPanel({ folderPaths, onOpenResult }: SearchPanelProps): Re
             .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
         )
         .then((merged) => setResults(merged))
+        .catch((error) => {
+          setResults([])
+          onError(error)
+        })
         .finally(() => setSearching(false))
     }, 300)
     return () => clearTimeout(timer)
-  }, [query, flags, folderPaths])
+  }, [query, flags, folderPaths, onError])
 
   const trimmed = query.trim()
 

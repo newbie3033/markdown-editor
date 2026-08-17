@@ -8,7 +8,8 @@ interface EditorContextMenuProps {
   x: number
   y: number
   editor: Editor | null
-  docPath: string | null
+  ensureDocPath: () => Promise<string | null>
+  onImageError: (error: unknown) => void
   onClose: () => void
 }
 
@@ -59,7 +60,8 @@ export function EditorContextMenu({
   x,
   y,
   editor,
-  docPath,
+  ensureDocPath,
+  onImageError,
   onClose
 }: EditorContextMenuProps): React.JSX.Element {
   const { t } = useI18n()
@@ -156,16 +158,15 @@ export function EditorContextMenu({
 
     if (item.action === 'image') {
       void (async () => {
-        const picked = await window.api.pickImage()
-        if (picked.canceled || !picked.path) return
-        const name = picked.path.split(/[\\/]/).pop() ?? 'image.png'
-        const result = await window.api.saveImage({
-          sourcePath: picked.path,
-          name,
-          docPath
-        })
-        if (result) {
-          runContextAction(editor, 'image', { imageSrc: result.src })
+        try {
+          const picked = await window.api.pickImage()
+          if (picked.canceled || !picked.path) return
+          const docPath = await ensureDocPath()
+          if (!docPath) return
+          const imported = await window.api.saveImage({ sourcePath: picked.path, docPath })
+          if (imported) runContextAction(editor, 'image', { imageSrc: imported.src })
+        } catch (error) {
+          onImageError(error)
         }
       })()
       return

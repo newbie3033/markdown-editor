@@ -4,7 +4,10 @@
 import { app, BrowserWindow, clipboard, dialog, Menu, shell } from 'electron'
 import { appendFileSync, existsSync, promises as fs, writeFileSync, writeSync } from 'node:fs'
 import { basename, join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { pathToFileURL } from 'node:url'
 import { IPC, REPOSITORY_URL } from '../shared/ipc'
+import { grantDirectoryAccess } from './ipc'
 
 const TEST_DIR = '/tmp/inkmark-selftest'
 const results: string[] = []
@@ -51,11 +54,18 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       )
     await fs.rm(TEST_DIR, { recursive: true, force: true })
     await fs.mkdir(join(TEST_DIR, 'docs'), { recursive: true })
+    grantDirectoryAccess(TEST_DIR)
     const png = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
       'base64'
     )
     await fs.writeFile(join(TEST_DIR, 'source.png'), png)
+    await fs.writeFile(join(TEST_DIR, 'source # 中文.png'), png)
+    const specialDocDir = join(TEST_DIR, 'docs # 中文')
+    const specialDocPath = join(specialDocDir, 'special.md')
+    await fs.mkdir(join(specialDocDir, 'assets'), { recursive: true })
+    await fs.writeFile(join(specialDocDir, 'assets', 'pic.png'), png)
+    await fs.writeFile(specialDocPath, '# Special Path\n\n![pic](assets/pic.png)\n')
     await fs.writeFile(join(TEST_DIR, 'docs', 'drop-test.md'), '# Dropped Document\n\nHello from drop test.')
     await fs.writeFile(join(TEST_DIR, 'docs', 'conflict.md'), '# Original\n')
 
@@ -73,6 +83,15 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     }
     check('editor mounted', mounted)
     console.log('[SELFTEST] INFO editor mounted in ~' + mountMs + 'ms')
+    const csp = (await js(
+      `document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content ?? ''`
+    )) as string
+    check(
+      'remote document images blocked by CSP',
+      csp.includes("img-src 'self' data: inkmark-asset:") &&
+        !/img-src[^;]*(?:https?:|file:)/.test(csp),
+      csp
+    )
 
     // 0d. Menu accelerators follow the Typora layout: zoom uses the Shift
     // variants (freeing Ctrl+0/=/- for paragraph / heading level), panel keys
@@ -182,6 +201,45 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       JSON.stringify(conflictResult)
     )
 
+    const saveAsConflictPath = join(TEST_DIR, 'docs', 'save-as-conflict.md')
+    await fs.writeFile(saveAsConflictPath, '# Save As Original\n')
+    const saveAsBefore = (await js(
+      `window.api.readFile(${JSON.stringify(saveAsConflictPath)})`
+    )) as { version: { mtimeMs: number; size: number; sha256: string } }
+    await fs.writeFile(saveAsConflictPath, '# Save As External\n')
+    const originalEarlySaveDialog = dialog.showSaveDialog.bind(dialog)
+    dialog.showSaveDialog = (async () => ({
+      canceled: false,
+      filePath: saveAsConflictPath
+    })) as typeof dialog.showSaveDialog
+    let saveAsConflict: { conflict?: boolean } | null = null
+    try {
+      saveAsConflict = (await js(
+        `window.api.saveFileDialog(${JSON.stringify(saveAsConflictPath)}, ${JSON.stringify('# Overwrite\n')}, ${JSON.stringify(saveAsBefore.version)})`
+      )) as { conflict?: boolean }
+    } finally {
+      dialog.showSaveDialog = originalEarlySaveDialog
+    }
+    check(
+      'save as detects external modification',
+      saveAsConflict?.conflict === true &&
+        (await fs.readFile(saveAsConflictPath, 'utf8')) === '# Save As External\n',
+      JSON.stringify(saveAsConflict)
+    )
+
+    const deniedPath = join('/tmp', `inkmark-not-authorized-${process.pid}.md`)
+    await fs.writeFile(deniedPath, '# denied\n')
+    const denied = (await js(
+      `window.api.readFile(${JSON.stringify(deniedPath)}).then(() => false, () => true)`
+    )) as boolean
+    await fs.unlink(deniedPath)
+    check('filesystem capability rejects unapproved path', denied === true)
+
+    const unsafeRegex = (await js(
+      `window.api.searchFiles(${JSON.stringify(TEST_DIR)}, '(a+)+$', { regex: true })`
+    )) as unknown[]
+    check('unsafe search regex rejected', Array.isArray(unsafeRegex) && unsafeRegex.length === 0)
+
     const draft = {
       filePath: null,
       content: '# Recovered',
@@ -197,22 +255,24 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     const clearedDraft = await js(`window.api.loadRecoveryDraft()`)
     check('recovery draft clears', clearedDraft === null)
 
-    // 2. saveImage from a source path (document open → assets/<name>).
-    const saved = (await js(
-      `window.api.saveImage({ sourcePath: '/tmp/inkmark-selftest/source.png', name: 'src.png', docPath: '/tmp/inkmark-selftest/docs/doc.md' })`
-    )) as { src: string } | null
-    check('saveImage(sourcePath)', saved?.src === 'assets/src.png', JSON.stringify(saved))
-    const exists1 = await fs
-      .access(join(TEST_DIR, 'docs', 'assets', 'src.png'))
-      .then(() => true)
-      .catch(() => false)
-    check('image saved next to doc', exists1)
+    // 2. OS-backed files yield only a capability-backed path. They are copied
+    // into assets later, after a document path is available.
+    const specialImagePath = join(TEST_DIR, 'source # 中文.png')
+    const authorizedImage = (await js(`(async () => {
+      window.api.queueSelfTestDroppedPath(${JSON.stringify(specialImagePath)})
+      return window.api.authorizeDroppedFile(new File([], 'source # 中文.png', { type: 'image/png' }))
+    })()`)) as { path?: string; url?: string } | null
+    check(
+      'local image authorization does not expose file URL',
+      authorizedImage?.path === specialImagePath && authorizedImage.url === undefined,
+      JSON.stringify(authorizedImage)
+    )
 
-    // 3. saveImage from raw data (no doc → absolute file URL).
+    // 3. Clipboard/raw image data also goes beside the saved document.
     const saved2 = (await js(
-      `window.api.saveImage({ data: Uint8Array.from([137,80,78,71,13,10,26,10]).buffer, name: 'p.png', docPath: null })`
+      `window.api.saveImage({ data: Uint8Array.from([137,80,78,71,13,10,26,10]).buffer, name: 'p.png', docPath: '/tmp/inkmark-selftest/docs/doc.md' })`
     )) as { src: string } | null
-    check('saveImage(data)', typeof saved2?.src === 'string' && saved2.src.includes('p.png'), JSON.stringify(saved2))
+    check('saveImage(data)', saved2?.src === 'assets/p.png', JSON.stringify(saved2))
 
     // 4. Context menu opens on right click; clicking 分割线 (hr) inserts an hr.
     const menuInfo = (await js(`(async () => {
@@ -307,29 +367,42 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     )
 
     // 5. Paste an image file into the editor.
-    const paste = (await js(`(async () => {
-      const bytes = Uint8Array.from([137,80,78,71,13,10,26,10])
-      const file = new File([bytes], 'pasted.png', { type: 'image/png' })
-      const dt = new DataTransfer()
-      dt.items.add(file)
-      const pm = document.querySelector('.ProseMirror')
-      pm.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
-      await new Promise(r => setTimeout(r, 1500))
-      const img = document.querySelector('.ProseMirror img')
-      const dirty = document.querySelector('.statusbar-left .dirty-indicator')?.textContent
-      return { imgSrc: img ? img.getAttribute('src') : null, dirty }
-    })()`)) as { imgSrc?: string | null; dirty?: string | null }
+    const originalPasteSaveDialog = dialog.showSaveDialog.bind(dialog)
+    dialog.showSaveDialog = (async () => ({
+      canceled: false,
+      filePath: join(TEST_DIR, 'docs', 'paste-doc.md')
+    })) as typeof dialog.showSaveDialog
+    let paste: { imgSrc?: string | null; dirty?: string | null; path?: string; rendered?: boolean } | null = null
+    try {
+      paste = (await js(`(async () => {
+        const bytes = Uint8Array.from(${JSON.stringify(Array.from(png))})
+        const file = new File([bytes], 'pasted.png', { type: 'image/png' })
+        const dt = new DataTransfer()
+        dt.items.add(file)
+        const pm = document.querySelector('.ProseMirror')
+        pm.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
+        await new Promise(r => setTimeout(r, 1500))
+        const img = document.querySelector('.ProseMirror img')
+        const dirty = document.querySelector('.statusbar-left .dirty-indicator')?.textContent
+        const path = document.querySelector('.status-path-btn')?.textContent || ''
+        return { imgSrc: img ? img.getAttribute('src') : null, dirty, path, rendered: !!img && img.complete && img.naturalWidth > 0 }
+      })()`)) as { imgSrc?: string | null; dirty?: string | null; path?: string; rendered?: boolean }
+    } finally {
+      dialog.showSaveDialog = originalPasteSaveDialog
+    }
     check(
-      'paste image inserted',
-      typeof paste?.imgSrc === 'string' && paste.imgSrc.includes('pasted.png'),
+      'clipboard image saves document and uses relative asset',
+      paste?.imgSrc === 'assets/pasted.png' &&
+        paste?.path === join(TEST_DIR, 'docs', 'paste-doc.md') &&
+        paste?.rendered === true,
       String(paste?.imgSrc)
     )
     check('listener fires (dirty dot)', paste?.dirty?.trim() === '●', String(paste?.dirty))
 
     // 6. Drop a .md document onto the editor → it opens.
     const drop = (await js(`(async () => {
+      window.api.queueSelfTestDroppedPath('/tmp/inkmark-selftest/docs/drop-test.md')
       const file = new File(['# Dropped Document'], 'drop-test.md', { type: 'text/markdown' })
-      Object.defineProperty(file, 'path', { value: '/tmp/inkmark-selftest/docs/drop-test.md' })
       const dt = new DataTransfer()
       dt.items.add(file)
       const pm = document.querySelector('.ProseMirror')
@@ -349,10 +422,10 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     check('drop md opens document', drop?.heading === 'Dropped Document', String(drop?.heading))
     check('opened file is not dirty', drop?.dirty === '○', String(drop?.dirty))
 
-    // 7. Drop an image onto the editor (doc is now open) → assets/<name> relative.
+    // 7. Dropped local images are imported and Markdown stays portable.
     const dropImg = (await js(`(async () => {
-      const file = new File([], 'dropped.png', { type: 'image/png' })
-      Object.defineProperty(file, 'path', { value: '/tmp/inkmark-selftest/source.png' })
+      window.api.queueSelfTestDroppedPath('/tmp/inkmark-selftest/source # 中文.png')
+      const file = new File([], 'source # 中文.png', { type: 'image/png' })
       const dt = new DataTransfer()
       dt.items.add(file)
       const pm = document.querySelector('.ProseMirror')
@@ -366,33 +439,73 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       await new Promise(r => setTimeout(r, 1500))
       const srcs = Array.from(document.querySelectorAll('.ProseMirror img:not(.ProseMirror-separator)'))
         .map(i => i.getAttribute('src'))
-      return { srcs }
-    })()`)) as { srcs?: Array<string | null> }
+      return { srcs, markdown: window.__inkmarkGetMarkdown() }
+    })()`)) as { srcs?: Array<string | null>; markdown?: string }
     check(
-      'drop image inserted (relative src)',
-      Array.isArray(dropImg?.srcs) && dropImg.srcs.some((s) => s?.includes('assets/dropped.png')),
-      JSON.stringify(dropImg?.srcs)
+      'drop image imported with relative asset path',
+      Array.isArray(dropImg?.srcs) &&
+        dropImg.srcs.some((s) => s === 'assets/source %23 中文.png') &&
+        dropImg.markdown?.includes('assets/source # 中文.png') === true &&
+        existsSync(join(TEST_DIR, 'docs', 'assets', 'source # 中文.png')),
+      JSON.stringify(dropImg)
     )
-    const exists2 = await fs
-      .access(join(TEST_DIR, 'docs', 'assets', 'dropped.png'))
-      .then(() => true)
-      .catch(() => false)
-    check('dropped image saved to assets dir', exists2)
 
-    // 8. The relative src actually renders (via the <base> element).
+    // 8. The imported relative URL actually renders through the custom protocol.
     const rendered = (await js(`(async () => {
       const img = Array.from(document.querySelectorAll('.ProseMirror img:not(.ProseMirror-separator)'))
-        .find(i => (i.getAttribute('src') || '').includes('dropped.png'))
+        .find(i => (i.getAttribute('src') || '').includes('source'))
       if (!img) return false
       await new Promise(r => setTimeout(r, 1000))
       return img.complete && img.naturalWidth > 0
     })()`)) as boolean
-    check('relative image renders via base href', rendered === true)
+    check('custom-protocol image renders', rendered === true)
+
+    win.webContents.send(IPC.openPath, specialDocPath)
+    await sleep(1400)
+    const specialPathRender = (await js(`(async () => {
+      const img = document.querySelector('.ProseMirror img:not(.ProseMirror-separator)')
+      await new Promise(r => setTimeout(r, 700))
+      return {
+        base: document.querySelector('base')?.href || '',
+        rendered: !!img && img.complete && img.naturalWidth > 0
+      }
+    })()`)) as { base?: string; rendered?: boolean }
+    check(
+      'relative image renders from special-character document path',
+      specialPathRender?.base ===
+        pathToFileURL(specialDocDir + '/').href.replace(/^file:\/\//, 'inkmark-asset://local') &&
+        specialPathRender?.rendered === true,
+      JSON.stringify(specialPathRender)
+    )
+
+    // Legacy file:// references render through the node view, but serialize
+    // back to their original Markdown instead of leaking the custom scheme.
+    const legacyUrl = pathToFileURL(specialImagePath).href
+    const legacyDocPath = join(TEST_DIR, 'docs', 'legacy-image.md')
+    await fs.writeFile(legacyDocPath, `# Legacy\n\n![legacy](${legacyUrl})\n`)
+    win.webContents.send(IPC.openPath, legacyDocPath)
+    await sleep(1200)
+    const legacyRender = (await js(`(async () => {
+      const img = document.querySelector('.ProseMirror img:not(.ProseMirror-separator)')
+      await new Promise(r => setTimeout(r, 500))
+      return {
+        src: img?.getAttribute('src') || '',
+        rendered: !!img && img.complete && img.naturalWidth > 0,
+        markdown: window.__inkmarkGetMarkdown()
+      }
+    })()`)) as { src?: string; rendered?: boolean; markdown?: string }
+    check(
+      'legacy file URL renders without changing Markdown',
+      legacyRender?.src?.startsWith('inkmark-asset://local/') === true &&
+        legacyRender.rendered === true &&
+        legacyRender.markdown?.includes(legacyUrl) === true,
+      JSON.stringify(legacyRender)
+    )
 
     // 9. Window-level drop of a .md file outside the editor.
     const dropWindow = (await js(`(async () => {
+      window.api.queueSelfTestDroppedPath('/tmp/inkmark-selftest/docs/drop-test.md')
       const file = new File(['# Window Drop'], 'win-drop.md', { type: 'text/markdown' })
-      Object.defineProperty(file, 'path', { value: '/tmp/inkmark-selftest/docs/drop-test.md' })
       const dt = new DataTransfer()
       dt.items.add(file)
       document.querySelector('.statusbar').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))
@@ -954,9 +1067,11 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     check('mode-edit restores editing', ro3 === 'true', String(ro3))
 
     // 13. Export HTML/PDF end to end (save dialogs stubbed).
+    await fs.mkdir(join(TEST_DIR, 'docs', 'assets'), { recursive: true })
+    await fs.writeFile(join(TEST_DIR, 'docs', 'assets', 'export.png'), png)
     await fs.writeFile(
       join(TEST_DIR, 'docs', 'export-test.md'),
-      '# Export Test\n\n![img](assets/dropped.png)\n'
+      '# Export Test\n\n![img](assets/export.png)\n'
     )
     win.webContents.send(IPC.openPath, `${TEST_DIR}/docs/export-test.md`)
     await sleep(1200)
@@ -970,22 +1085,24 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     try {
       const html = (await js(`window.__inkmarkBuildExportHtml()`)) as string
       check(
-        'export html built (content + absolutized image)',
+        'export html built with portable source before main-process embedding',
         typeof html === 'string' &&
           html.includes('class="md-body"') &&
-          html.includes('file:///tmp/inkmark-selftest/docs/assets/dropped.png') &&
+          html.includes('src="assets/export.png"') &&
           html.includes('rotate(45deg)'),
         `len=${html?.length ?? 0}`
       )
-      await js(`window.api.exportHtml('test-doc', ${JSON.stringify(html)})`)
+      await js(`window.api.exportHtml('test-doc', ${JSON.stringify(html)}, ${JSON.stringify(join(TEST_DIR, 'docs', 'export-test.md'))})`)
       const htmlFile = join(EXPORT_DIR, 'test-doc.html')
       const htmlContent = await fs.readFile(htmlFile, 'utf8').catch(() => '')
       check(
-        'export html file written',
-        htmlContent.length > 0 && htmlContent.includes('class="md-body"'),
+        'export html embeds local image',
+        htmlContent.length > 0 &&
+          htmlContent.includes('class="md-body"') &&
+          htmlContent.includes('src="data:image/png;base64,'),
         `len=${htmlContent.length}`
       )
-      await js(`window.api.exportPdf('test-doc', ${JSON.stringify(html)})`)
+      await js(`window.api.exportPdf('test-doc', ${JSON.stringify(html)}, ${JSON.stringify(join(TEST_DIR, 'docs', 'export-test.md'))})`)
       const pdfBuf = await fs.readFile(join(EXPORT_DIR, 'test-doc.pdf')).catch(() => null)
       check(
         'export pdf file written',
@@ -993,6 +1110,28 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
           pdfBuf.length > 1000 &&
           pdfBuf.subarray(0, 4).toString() === '%PDF',
         `len=${pdfBuf?.length ?? 0} header=${pdfBuf?.subarray(0, 8).toString() ?? ''}`
+      )
+
+      // A realistic large image must not be expanded into a data: navigation
+      // URL for PDF. The hidden export page loads it through inkmark-asset.
+      const largeSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><metadata>${'x'.repeat(4 * 1024 * 1024)}</metadata><rect width="120" height="80" fill="#4a90e2"/></svg>`
+      await fs.writeFile(join(TEST_DIR, 'docs', 'assets', 'large.svg'), largeSvg)
+      const largeHtml = html.replace('assets/export.png', 'assets/large.svg')
+      await js(`window.api.exportPdf('large-image-doc', ${JSON.stringify(largeHtml)}, ${JSON.stringify(join(TEST_DIR, 'docs', 'export-test.md'))})`)
+      const largePdf = await fs.readFile(join(EXPORT_DIR, 'large-image-doc.pdf')).catch(() => null)
+      check(
+        'export pdf handles large local image without data URL navigation',
+        largePdf != null && largePdf.length > 1000 && largePdf.subarray(0, 4).toString() === '%PDF',
+        `len=${largePdf?.length ?? 0}`
+      )
+
+      const missingHtml = html.replace('assets/export.png', 'assets/no-longer-exists.png')
+      await js(`window.api.exportPdf('missing-image-doc', ${JSON.stringify(missingHtml)}, ${JSON.stringify(join(TEST_DIR, 'docs', 'export-test.md'))})`)
+      const missingPdf = await fs.readFile(join(EXPORT_DIR, 'missing-image-doc.pdf')).catch(() => null)
+      check(
+        'export pdf tolerates missing local image',
+        missingPdf != null && missingPdf.length > 1000 && missingPdf.subarray(0, 4).toString() === '%PDF',
+        `len=${missingPdf?.length ?? 0}`
       )
     } finally {
       dialog.showSaveDialog = originalShowSave
@@ -1101,8 +1240,8 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     await fs.writeFile(join(TEST_DIR, 'docs3', 'third.md'), '# Third Folder File\n')
     const folderDrop = (await js(`(async () => {
       const before = document.querySelectorAll('.folder-root').length
+      window.api.queueSelfTestDroppedPath('/tmp/inkmark-selftest/docs3')
       const file = new File([], 'docs3', { type: '' })
-      Object.defineProperty(file, 'path', { value: '/tmp/inkmark-selftest/docs3' })
       const dt = new DataTransfer()
       dt.items.add(file)
       document.querySelector('.statusbar').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))
@@ -1116,8 +1255,10 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       folderDrop?.before === 1 && folderDrop?.after === 2 && folderDrop?.found === true,
       JSON.stringify(folderDrop)
     )
-    const webUtilsAvailable = (await js(`typeof window.api.getPathForFile === 'function'`)) as boolean
-    check('webUtils.getPathForFile exposed', webUtilsAvailable === true)
+    const droppedAuthorizationAvailable = (await js(
+      `typeof window.api.authorizeDroppedFile === 'function'`
+    )) as boolean
+    check('dropped files use preload authorization', droppedAuthorizationAvailable === true)
     // Close the dropped folder again to keep later assertions clean.
     await js(`(async () => {
       const roots = document.querySelectorAll('.folder-root')
@@ -1263,10 +1404,32 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       textarea.dispatchEvent(new Event('input', { bubbles: true }))
       return true
     })()`)
+    await sleep(650)
     win.webContents.send(IPC.menuAction, 'save')
     await sleep(900)
     const sourceSaved = await fs.readFile(join(TEST_DIR, 'docs', 'saved-in-folder.md'), 'utf8').catch(() => '')
     check('source mode saves textarea content', sourceSaved === sourceValue, JSON.stringify(sourceSaved))
+    const recoveryAfterSave = await js(`window.api.loadRecoveryDraft()`)
+    check('successful save clears recovery draft immediately', recoveryAfterSave === null)
+    const backupName = `${createHash('sha256').update(join(TEST_DIR, 'docs', 'saved-in-folder.md')).digest('hex')}.bak`
+    const backupExists = await fs
+      .access(join(app.getPath('userData'), 'backups', backupName))
+      .then(() => true)
+      .catch(() => false)
+    check('save keeps a private previous-version backup', backupExists)
+
+    const originalExternalDialog = dialog.showMessageBox.bind(dialog)
+    dialog.showMessageBox = (async () => ({
+      response: 0,
+      checkboxChecked: false
+    })) as unknown as typeof dialog.showMessageBox
+    await fs.writeFile(join(TEST_DIR, 'docs', 'saved-in-folder.md'), '# Reloaded External Revision\n')
+    await sleep(1200)
+    const reloadedExternal = (await js(
+      `document.querySelector('.source-editor')?.value === '# Reloaded External Revision\\n'`
+    )) as boolean
+    check('external file watcher can reload changed document', reloadedExternal === true)
+    dialog.showMessageBox = originalExternalDialog
 
     await js(`(() => {
       const textarea = document.querySelector('.source-editor')
@@ -1291,6 +1454,46 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     dialog.showMessageBox = originalGuardDialog
     win.webContents.send(IPC.menuAction, 'toggle-source')
     await sleep(300)
+
+    // Portable relative assets require an untitled document to be saved. If
+    // that Save As is cancelled, no image is inserted or copied.
+    const originalImageSaveDialog = dialog.showSaveDialog.bind(dialog)
+    let imageSaveDialogCalled = false
+    dialog.showSaveDialog = (async () => ({
+      canceled: (imageSaveDialogCalled = true),
+      filePath: ''
+    })) as typeof dialog.showSaveDialog
+    try {
+      await js(`(async () => {
+        window.api.queueSelfTestDroppedPath('/tmp/inkmark-selftest/source # 中文.png')
+        const file = new File([], 'source # 中文.png', { type: 'image/png' })
+        const dt = new DataTransfer()
+        dt.items.add(file)
+        const pm = document.querySelector('.ProseMirror')
+        const r = pm.getBoundingClientRect()
+        const ev = new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })
+        Object.defineProperty(ev, 'clientX', { value: r.left + Math.min(100, r.width / 2) })
+        Object.defineProperty(ev, 'clientY', { value: r.top + 10 })
+        pm.dispatchEvent(ev)
+        return true
+      })()`)
+      await sleep(1500)
+    } finally {
+      dialog.showSaveDialog = originalImageSaveDialog
+    }
+    const untitledDrop = (await js(`(() => {
+      const src = Array.from(document.querySelectorAll('.ProseMirror img'))
+        .map(i => i.getAttribute('src') || '')
+        .find(src => src.includes('source')) || ''
+      return { src, path: document.querySelector('.status-path-btn')?.textContent || '' }
+    })()`)) as { src?: string; path?: string }
+    check(
+      'untitled local image drop stops when document save is canceled',
+      untitledDrop?.src === '' &&
+        untitledDrop?.path === '未命名' &&
+        (imageSaveDialogCalled as boolean) === true,
+      JSON.stringify(untitledDrop)
+    )
 
     // 16. Hyperlinks: web link → external browser; local link → open in app;
     // ctrl+click also navigates.

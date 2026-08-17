@@ -1,8 +1,8 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, protocol, shell } from 'electron'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { IPC } from '../shared/ipc'
-import { registerIpc } from './ipc'
+import { grantDocumentAccess, registerLocalProtocols, registerIpc } from './ipc'
 import { buildMenu, rebuildMenu } from './menu'
 import { initLocale } from './i18n'
 
@@ -13,6 +13,23 @@ const portableDir = process.env['PORTABLE_EXECUTABLE_DIR']
 if (portableDir) {
   app.setPath('userData', join(portableDir, 'InkMarkData'))
 }
+const selfTestUserData = process.env['INKMARK_SELFTEST_USER_DATA']
+if (process.env['INKMARK_SELFTEST'] === '1' && selfTestUserData) {
+  app.setPath('userData', selfTestUserData)
+}
+
+// Register before app readiness so relative URLs resolve with normal web URL
+// semantics. The handler itself is installed after Electron is ready.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'inkmark-asset',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true }
+  },
+  {
+    scheme: 'inkmark-export',
+    privileges: { standard: true, secure: true }
+  }
+])
 
 let mainWindow: BrowserWindow | null = null
 
@@ -119,6 +136,8 @@ function createWindow(): void {
 }
 
 function sendOpenPath(path: string): void {
+  if (!isMarkdownPath(path) || !existsSync(path)) return
+  grantDocumentAccess(path)
   const win = mainWindow
   if (win && rendererReady) {
     // Renderer listeners are up: deliver directly.
@@ -161,6 +180,7 @@ if (!gotSingleInstanceLock) {
 
   app.whenReady().then(() => {
     initLocale(rebuildMenu)
+    registerLocalProtocols()
     registerIpc(() => mainWindow)
     buildMenu(() => mainWindow)
 

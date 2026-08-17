@@ -19,10 +19,10 @@ import { applyLinkToCtx } from './commands'
 import { tStatic } from './i18n'
 
 export interface TyporaKeymapOptions {
-  /** Path of the currently open document (used to store picked images). */
-  getDocPath: () => string | null
   /** Whether the editor is in read-only mode (blocks image insertion). */
   isReadOnly: () => boolean
+  ensureDocPath: () => Promise<string | null>
+  onImageError: (error: unknown) => void
 }
 
 /**
@@ -117,17 +117,17 @@ export function createTyporaKeymap(options: TyporaKeymapOptions): MilkdownPlugin
     const imageShortcut = (): boolean => {
       if (options.isReadOnly()) return false
       void (async () => {
-        const picked = await window.api.pickImage()
-        if (picked.canceled || !picked.path) return
-        const name = picked.path.split(/[\\/]/).pop() ?? 'image.png'
-        const result = await window.api.saveImage({
-          sourcePath: picked.path,
-          name,
-          docPath: options.getDocPath()
-        })
-        if (result) {
-          ctx.get(commandsCtx).call(insertImageCommand.key, { src: result.src })
+        try {
+          const picked = await window.api.pickImage()
+          if (picked.canceled || !picked.path) return
+          const docPath = await options.ensureDocPath()
+          if (!docPath) return
+          const imported = await window.api.saveImage({ sourcePath: picked.path, docPath })
+          if (!imported) return
+          ctx.get(commandsCtx).call(insertImageCommand.key, { src: imported.src })
           ctx.get(editorViewCtx).focus()
+        } catch (error) {
+          options.onImageError(error)
         }
       })()
       return true

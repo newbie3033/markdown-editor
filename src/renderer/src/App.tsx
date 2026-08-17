@@ -11,16 +11,16 @@ import { OutlinePanel } from './components/OutlinePanel'
 import { StatusBar } from './components/StatusBar'
 import { EditorContextMenu } from './components/EditorContextMenu'
 import { FindBar } from './components/FindBar'
-import { buildHtmlDocument, absolutizeUrls } from './lib/export'
+import { buildHtmlDocument } from './lib/export'
 import { appendImage } from './lib/commands'
 import { findTextMatches, selectMatch } from './lib/search'
 import { useResizableWidth } from './lib/useResizableWidth'
 import { usePersistentBoolean } from './lib/usePersistentBoolean'
 import {
   computeStats,
+  authorizeDroppedFile,
   dirNameFromPath,
   fileNameFromPath,
-  filePathOf,
   isAbsolutePath,
   isImageFileName,
   isMarkdownFileName,
@@ -28,12 +28,16 @@ import {
 } from './lib/markdown'
 import { useI18n, welcomeMarkdown } from './lib/i18n'
 
-type FileWithPath = File & { path?: string }
 type SaveOutcome = 'saved' | 'canceled' | 'failed' | 'stale'
 
 // Milkdown serializes line endings as LF. Treat CRLF/LF as equivalent, but
 // preserve trailing blank lines: adding/removing them is still a real edit.
 const normalizeMarkdown = (text: string): string => text.replace(/\r\n/g, '\n')
+
+const sameFileVersion = (left: FileVersion | null, right: FileVersion | null): boolean =>
+  left?.mtimeMs === right?.mtimeMs &&
+  left?.size === right?.size &&
+  left?.sha256 === right?.sha256
 
 export default function App(): React.JSX.Element {
   const { t, lang, setLang, ready: localeReady } = useI18n()
@@ -92,6 +96,9 @@ export default function App(): React.JSX.Element {
   // concurrently. Each queued save reads the latest editor content when it
   // actually begins.
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const externalPromptRef = useRef(false)
+  const ignoredExternalVersionRef = useRef<string | null>(null)
+  const recoveryErrorShownRef = useRef(false)
 
   const stats = useMemo(() => computeStats(markdown), [markdown])
   const title = fileNameFromPath(filePath) || t('status.untitled')
@@ -104,8 +111,27 @@ export default function App(): React.JSX.Element {
     recoveryStartedRef.current = true
     void window.api
       .loadRecoveryDraft()
-      .then((draft) => {
+      .then(async (draft) => {
         if (!draft || normalizeMarkdown(draft.content) === normalizeMarkdown(draft.cleanContent)) return
+        if (draft.filePath) {
+          try {
+            const disk = await window.api.readFile(draft.filePath)
+            // A successful save may have beaten the asynchronous draft
+            // cleanup during a crash. Never resurrect content already on disk.
+            if (normalizeMarkdown(disk.content) === normalizeMarkdown(draft.content)) {
+              await window.api.clearRecoveryDraft()
+              return
+            }
+          } catch {
+            // Missing/unreadable originals still benefit from draft recovery.
+          }
+        }
+        const name = fileNameFromPath(draft.filePath) || t('status.untitled')
+        const choice = await window.api.confirmRecovery(name, draft.updatedAt)
+        if (choice === 'discard') {
+          await window.api.clearRecoveryDraft()
+          return
+        }
         welcomedRef.current = true
         setFilePath(draft.filePath)
         filePathRef.current = draft.filePath
@@ -120,9 +146,12 @@ export default function App(): React.JSX.Element {
         setOpenFiles(draft.filePath ? [draft.filePath] : [])
         setDirty(true)
       })
-      .catch((error) => console.error('Failed to load recovery draft', error))
+      .catch((error) => {
+        console.error('Failed to load recovery draft', error)
+        void window.api.showError(t('error.recoveryFailed'), String(error))
+      })
       .finally(() => setRecoveryReady(true))
-  }, [localeReady])
+  }, [localeReady, t])
 
   // Seed the initial document once locale and crash recovery have completed. The welcome
   // page shows only on the very first launch (persisted in localStorage);
@@ -200,13 +229,14 @@ export default function App(): React.JSX.Element {
     [sourceMode]
   )
 
-  // Resolve relative image links against the current document directory
-  // by keeping a <base href="file://<doc dir>/"> element up to date.
-  useEffect(() => {
-    const existing = document.querySelector('base')
-    if (filePath) {
-      const dir = dirNameFromPath(filePath).replace(/\\/g, '/').replace(/\/+$/, '')
-      const href = `file://${dir}/`
+  // Resolve relative local resources through the main process's constrained
+  // custom protocol. Markdown keeps portable paths; Chromium never receives
+  // direct file:// access.
+  const updateDocumentBase = useCallback(async (path: string | null): Promise<void> => {
+    if (path) {
+      const href = await window.api.getDocumentBaseUrl(path)
+      if (filePathRef.current !== path) return
+      const existing = document.querySelector('base')
       if (existing) {
         existing.setAttribute('href', href)
       } else {
@@ -215,9 +245,15 @@ export default function App(): React.JSX.Element {
         document.head.appendChild(base)
       }
     } else {
-      existing?.remove()
+      document.querySelector('base')?.remove()
     }
-  }, [filePath])
+  }, [])
+
+  useEffect(() => {
+    void updateDocumentBase(filePath).catch((error) =>
+      console.error('Failed to update document base URL', error)
+    )
+  }, [filePath, updateDocumentBase])
 
   const getActiveContent = useCallback((): string => {
     if (sourceModeRef.current) return markdownRef.current
@@ -231,10 +267,15 @@ export default function App(): React.JSX.Element {
   const clearRecoveryDraft = useCallback(async (): Promise<void> => {
     try {
       await window.api.clearRecoveryDraft()
+      recoveryErrorShownRef.current = false
     } catch (error) {
       console.error('Failed to clear recovery draft', error)
+      if (!recoveryErrorShownRef.current) {
+        recoveryErrorShownRef.current = true
+        await window.api.showError(t('error.recoveryFailed'), String(error)).catch(() => undefined)
+      }
     }
-  }, [])
+  }, [t])
 
   const reportSaveError = useCallback(async (message: string, error?: unknown): Promise<void> => {
     try {
@@ -246,6 +287,13 @@ export default function App(): React.JSX.Element {
       console.error('Failed to show save error', reportError)
     }
   }, [])
+
+  const reportOpenError = useCallback(
+    (error: unknown): void => {
+      void reportSaveError(t('error.openFailed'), error)
+    },
+    [reportSaveError, t]
+  )
 
   // Keep one private, atomically-written recovery snapshot. This is recovery
   // data, not the user's saved document, and is removed after save/discard.
@@ -265,10 +313,19 @@ export default function App(): React.JSX.Element {
           sourceMode: sourceModeRef.current,
           updatedAt: Date.now()
         })
-        .catch((error) => console.error('Failed to save recovery draft', error))
+        .then(() => {
+          recoveryErrorShownRef.current = false
+        })
+        .catch((error) => {
+          console.error('Failed to save recovery draft', error)
+          if (!recoveryErrorShownRef.current) {
+            recoveryErrorShownRef.current = true
+            void window.api.showError(t('error.recoveryFailed'), String(error))
+          }
+        })
     }, 500)
     return () => window.clearTimeout(timer)
-  }, [dirty, filePath, markdown, sourceMode, recoveryReady, clearRecoveryDraft, getActiveContent, hasUnsavedChanges])
+  }, [dirty, filePath, markdown, sourceMode, recoveryReady, clearRecoveryDraft, getActiveContent, hasUnsavedChanges, t])
 
   const handleEditorReady = useCallback((editor: Editor) => {
     editorRef.current = editor
@@ -321,8 +378,16 @@ export default function App(): React.JSX.Element {
 
       try {
         if (!currentPath || saveAs) {
-          const result = await window.api.saveFileDialog(currentPath, content)
+          const result = await window.api.saveFileDialog(
+            currentPath,
+            content,
+            currentPath ? fileVersionRef.current : null
+          )
           if (result.canceled || !result.path) return 'canceled'
+          if (result.conflict) {
+            await reportSaveError(t('error.fileChanged'))
+            return 'failed'
+          }
 
           const savedPath = result.path
           const isNewPath = savedPath !== currentPath
@@ -366,6 +431,8 @@ export default function App(): React.JSX.Element {
         // exact content that was persisted.
         const stillCurrent = normalizeMarkdown(getActiveContent()) === canonical
         setDirty(!stillCurrent)
+        if (stillCurrent) await clearRecoveryDraft()
+        ignoredExternalVersionRef.current = null
         return stillCurrent ? 'saved' : 'stale'
       } catch (error) {
         console.error('Failed to save file', error)
@@ -373,7 +440,7 @@ export default function App(): React.JSX.Element {
         return 'failed'
       }
     },
-    [addToOpenFiles, getActiveContent, reportSaveError, t]
+    [addToOpenFiles, clearRecoveryDraft, getActiveContent, reportSaveError, t]
   )
 
   const save = useCallback(
@@ -387,6 +454,17 @@ export default function App(): React.JSX.Element {
     },
     [performSave]
   )
+
+  const ensureDocumentPath = useCallback(async (): Promise<string | null> => {
+    if (filePathRef.current) {
+      await updateDocumentBase(filePathRef.current)
+      return filePathRef.current
+    }
+    const outcome = await save(false)
+    const path = outcome === 'saved' || outcome === 'stale' ? filePathRef.current : null
+    if (path) await updateDocumentBase(path)
+    return path
+  }, [save, updateDocumentBase])
 
   const confirmBeforeReplace = useCallback(async (): Promise<boolean> => {
     if (!hasUnsavedChanges()) {
@@ -415,6 +493,8 @@ export default function App(): React.JSX.Element {
       setFilePath(path)
       filePathRef.current = path
       fileVersionRef.current = version
+      ignoredExternalVersionRef.current = null
+      await updateDocumentBase(path)
       setMarkdown(content)
       markdownRef.current = content
       setDirty(false)
@@ -434,19 +514,24 @@ export default function App(): React.JSX.Element {
       }
       focusEditor()
     },
-    [addToOpenFiles, focusEditor]
+    [addToOpenFiles, focusEditor, updateDocumentBase]
   )
 
   const openFile = useCallback(async () => {
-    const result = await window.api.openFileDialog()
-    if (!result.canceled && result.path && result.content != null) {
-      if (!(await confirmBeforeReplace())) return
-      // The selected file may be the current document and may just have been
-      // saved by the confirmation flow, so read it again after confirmation.
-      const latest = await window.api.readFile(result.path)
-      await loadDocument(result.path, latest.content, latest.version)
+    try {
+      const result = await window.api.openFileDialog()
+      if (!result.canceled && result.path && result.content != null) {
+        if (!(await confirmBeforeReplace())) return
+        // The selected file may be the current document and may just have been
+        // saved by the confirmation flow, so read it again after confirmation.
+        const latest = await window.api.readFile(result.path)
+        await loadDocument(result.path, latest.content, latest.version)
+      }
+    } catch (error) {
+      console.error('Failed to open file', error)
+      await reportSaveError(t('error.openFailed'), error)
     }
-  }, [confirmBeforeReplace, loadDocument])
+  }, [confirmBeforeReplace, loadDocument, reportSaveError, t])
 
   const openPath = useCallback(
     async (path: string) => {
@@ -456,29 +541,35 @@ export default function App(): React.JSX.Element {
         await loadDocument(path, result.content, result.version)
       } catch (error) {
         console.error('Failed to open file', error)
+        await reportSaveError(t('error.openFailed'), error)
       }
     },
-    [confirmBeforeReplace, loadDocument]
+    [confirmBeforeReplace, loadDocument, reportSaveError, t]
   )
 
   const openFolder = useCallback(async (explicitPath?: string) => {
-    let path = explicitPath
-    if (!path) {
-      const result = await window.api.openFolderDialog()
-      if (result.canceled || !result.path) return
-      path = result.path
+    try {
+      let path = explicitPath
+      if (!path) {
+        const result = await window.api.openFolderDialog()
+        if (result.canceled || !result.path) return
+        path = result.path
+      }
+      const tree = await window.api.listMarkdown(path)
+      setFolders((prev) =>
+        prev.some((folder) => folder.path === path)
+          ? prev.map((folder) => (folder.path === path ? { path, tree } : folder))
+          : [...prev, { path, tree }]
+      )
+      // Files now covered by this folder no longer need to be listed as loose.
+      setOpenFiles((prev) =>
+        prev.filter((p) => !(p.startsWith(path + '/') || p.startsWith(path + '\\')))
+      )
+    } catch (error) {
+      console.error('Failed to open folder', error)
+      await reportSaveError(t('error.openFailed'), error)
     }
-    const tree = await window.api.listMarkdown(path)
-    setFolders((prev) =>
-      prev.some((folder) => folder.path === path)
-        ? prev.map((folder) => (folder.path === path ? { path, tree } : folder))
-        : [...prev, { path, tree }]
-    )
-    // Files now covered by this folder no longer need to be listed as loose.
-    setOpenFiles((prev) =>
-      prev.filter((p) => !(p.startsWith(path + '/') || p.startsWith(path + '\\')))
-    )
-  }, [])
+  }, [reportSaveError, t])
 
   const closeFolder = useCallback((path: string) => {
     setFolders((prev) => prev.filter((folder) => folder.path !== path))
@@ -509,10 +600,53 @@ export default function App(): React.JSX.Element {
         }
       } catch (error) {
         console.error('Failed to open search result', error)
+        await reportSaveError(t('error.openFailed'), error)
       }
     },
-    [confirmBeforeReplace, loadDocument]
+    [confirmBeforeReplace, loadDocument, reportSaveError, t]
   )
+
+  const handleExternalFileChange = useCallback(async () => {
+    const path = filePathRef.current
+    if (!path || externalPromptRef.current) return
+    externalPromptRef.current = true
+    try {
+      const latest = await window.api.readFile(path)
+      if (sameFileVersion(latest.version, fileVersionRef.current)) return
+      const signature = `${latest.version.mtimeMs}:${latest.version.size}:${latest.version.sha256}`
+      if (ignoredExternalVersionRef.current === signature) return
+
+      const choice = await window.api.confirmExternalChange(
+        fileNameFromPath(path),
+        hasUnsavedChanges()
+      )
+      if (choice === 'reload') {
+        ignoredExternalVersionRef.current = null
+        await clearRecoveryDraft()
+        await loadDocument(path, latest.content, latest.version)
+      } else if (choice === 'saveAs') {
+        const outcome = await save(true)
+        if (outcome === 'canceled' || outcome === 'failed') {
+          ignoredExternalVersionRef.current = signature
+        }
+      } else {
+        // Keep the old expected version so a later Ctrl+S still refuses to
+        // overwrite the external revision.
+        ignoredExternalVersionRef.current = signature
+      }
+    } catch (error) {
+      console.error('Failed to inspect externally changed file', error)
+      await reportSaveError(t('error.openFailed'), error)
+    } finally {
+      externalPromptRef.current = false
+    }
+  }, [clearRecoveryDraft, hasUnsavedChanges, loadDocument, reportSaveError, save, t])
+
+  useEffect(() => {
+    void window.api.watchFile(filePath).catch((error) =>
+      console.error('Failed to watch current file', error)
+    )
+  }, [filePath])
 
   // The main process routes window closing through here: ask about unsaved
   // changes, then approve the close (or not).
@@ -594,21 +728,32 @@ export default function App(): React.JSX.Element {
 
   const buildDocumentHtml = useCallback(() => {
     const body = editorRef.current?.action(getHTML()) ?? ''
-    const html = buildHtmlDocument(body, title)
-    return absolutizeUrls(html, filePathRef.current ? dirNameFromPath(filePathRef.current) : null)
+    return buildHtmlDocument(body, title)
   }, [title])
 
   const exportHtml = useCallback(async () => {
-    await window.api.exportHtml(title, buildDocumentHtml())
-  }, [buildDocumentHtml, title])
+    try {
+      await window.api.exportHtml(title, buildDocumentHtml(), filePathRef.current)
+    } catch (error) {
+      await reportSaveError(t('error.exportFailed'), error)
+    }
+  }, [buildDocumentHtml, reportSaveError, t, title])
 
   const exportPdf = useCallback(async () => {
-    await window.api.exportPdf(title, buildDocumentHtml())
-  }, [buildDocumentHtml, title])
+    try {
+      await window.api.exportPdf(title, buildDocumentHtml(), filePathRef.current)
+    } catch (error) {
+      await reportSaveError(t('error.exportFailed'), error)
+    }
+  }, [buildDocumentHtml, reportSaveError, t, title])
 
   const print = useCallback(async () => {
-    await window.api.exportPrint(buildDocumentHtml())
-  }, [buildDocumentHtml])
+    try {
+      await window.api.exportPrint(buildDocumentHtml(), filePathRef.current)
+    } catch (error) {
+      await reportSaveError(t('error.exportFailed'), error)
+    }
+  }, [buildDocumentHtml, reportSaveError, t])
 
   // Debug/self-test hook: expose the export-HTML builder to the headless
   // self-test so the PDF/HTML export path can be verified end to end.
@@ -805,6 +950,9 @@ export default function App(): React.JSX.Element {
     if (!recoveryReady) return
     const offMenu = window.api.onMenuAction(handleMenuAction)
     const offOpen = window.api.onOpenPath((path) => void openPath(path))
+    const offFileChanged = window.api.onFileChanged(() => {
+      void handleExternalFileChange()
+    })
     const offClose = window.api.onCloseRequest(() => {
       void handleCloseRequest()
     })
@@ -812,9 +960,10 @@ export default function App(): React.JSX.Element {
     return () => {
       offMenu()
       offOpen()
+      offFileChanged()
       offClose()
     }
-  }, [recoveryReady, handleMenuAction, openPath, handleCloseRequest])
+  }, [recoveryReady, handleMenuAction, openPath, handleCloseRequest, handleExternalFileChange])
 
   // Window-level drag & drop: open .md documents and append images dropped
   // outside of the editor.
@@ -829,14 +978,17 @@ export default function App(): React.JSX.Element {
       if (target?.closest('.ProseMirror')) return
 
       const files = Array.from(event.dataTransfer?.files ?? [])
-      for (const file of files) {
-        const path = filePathOf(file)
-        if (!path) continue
+      const dropped = await Promise.all(
+        files.map(async (file) => ({ file, authorized: await authorizeDroppedFile(file) }))
+      )
+      for (const { file, authorized } of dropped) {
+        const path = authorized?.path ?? ''
         if (isMarkdownFileName(file.name)) {
+          if (!path) continue
           void openPath(path)
           return
         }
-        if (await window.api.pathIsDirectory(path)) {
+        if (authorized?.isDirectory) {
           void openFolder(path)
           return
         }
@@ -844,16 +996,28 @@ export default function App(): React.JSX.Element {
       void (async () => {
         const editor = editorRef.current
         if (!editor || readOnlyRef.current) return
-        for (const file of files) {
-          const path = filePathOf(file)
-          if (!(file.type.startsWith('image/') || isImageFileName(file.name))) continue
-          const result = await window.api.saveImage({
-            sourcePath: path || null,
-            data: path ? null : await file.arrayBuffer(),
-            name: file.name,
-            docPath: filePathRef.current
-          })
-          if (result) appendImage(editor, result.src)
+        const images = dropped.filter(
+          ({ file }) => file.type.startsWith('image/') || isImageFileName(file.name)
+        )
+        if (images.length === 0) return
+        let clipboardDocPath: string | null = null
+        for (const { file, authorized } of images) {
+          try {
+            clipboardDocPath ??= await ensureDocumentPath()
+            if (!clipboardDocPath) return
+            const result = await window.api.saveImage(
+              authorized?.path
+                ? { sourcePath: authorized.path, docPath: clipboardDocPath }
+                : {
+                    data: await file.arrayBuffer(),
+                    name: file.name,
+                    docPath: clipboardDocPath
+                  }
+            )
+            if (result) appendImage(editor, result.src)
+          } catch (error) {
+            await reportSaveError(t('error.imageFailed'), error)
+          }
         }
       })()
     }
@@ -863,7 +1027,7 @@ export default function App(): React.JSX.Element {
       document.removeEventListener('dragover', onDragOver)
       document.removeEventListener('drop', onDrop)
     }
-  }, [openPath])
+  }, [ensureDocumentPath, openFolder, openPath, reportSaveError, t])
 
   const onEditorContextMenu = useCallback(
     (event: React.MouseEvent) => {
@@ -874,7 +1038,6 @@ export default function App(): React.JSX.Element {
     [sourceMode, readOnly]
   )
 
-  const getDocPath = useCallback(() => filePathRef.current, [])
   const getEditor = useCallback(() => editorRef.current, [])
 
   // Smart hyperlink handling: http/https → external browser; local links are
@@ -923,9 +1086,9 @@ export default function App(): React.JSX.Element {
       const anchor = target?.closest?.('a[href]') as HTMLAnchorElement | null
       if (!anchor) return
       event.preventDefault()
-      void handleLinkClick(anchor.getAttribute('href') ?? '')
+      void handleLinkClick(anchor.getAttribute('href') ?? '').catch(reportOpenError)
     },
-    [handleLinkClick]
+    [handleLinkClick, reportOpenError]
   )
 
   return (
@@ -946,6 +1109,7 @@ export default function App(): React.JSX.Element {
           onCloseFile={(path) => void closeFile(path)}
           onOpenSearchResult={(path, index, query, flags) =>
             void openSearchResult(path, index, query, flags)}
+          onSearchError={reportOpenError}
         />
       )}
 
@@ -981,8 +1145,11 @@ export default function App(): React.JSX.Element {
                   onReady={handleEditorReady}
                   onChange={handleChange}
                   onOutline={handleOutline}
-                  getDocPath={getDocPath}
+                  ensureDocPath={ensureDocumentPath}
                   isReadOnly={() => readOnlyRef.current}
+                  onImageError={(error) => {
+                    void reportSaveError(t('error.imageFailed'), error)
+                  }}
                   onOpenDocument={(path) => void openPath(path)}
                   onOpenFolder={(path) => void openFolder(path)}
                 />
@@ -1039,15 +1206,18 @@ export default function App(): React.JSX.Element {
         />
       )}
 
-      {ctxMenu && (
-        <EditorContextMenu
-          x={ctxMenu.x}
-          y={ctxMenu.y}
-          editor={editorRef.current}
-          docPath={filePath}
-          onClose={() => setCtxMenu(null)}
-        />
-      )}
+        {ctxMenu && (
+          <EditorContextMenu
+            x={ctxMenu.x}
+            y={ctxMenu.y}
+            editor={editorRef.current}
+            ensureDocPath={ensureDocumentPath}
+            onImageError={(error) => {
+              void reportSaveError(t('error.imageFailed'), error)
+            }}
+            onClose={() => setCtxMenu(null)}
+          />
+        )}
     </div>
   )
 }

@@ -25,6 +25,7 @@ interface SidebarProps {
   onCloseFolder: (path: string) => void
   onCloseFile: (path: string) => void
   onOpenSearchResult: (path: string, matchIndex: number, query: string, flags: SearchFlags) => void
+  onSearchError: (error: unknown) => void
 }
 
 export function Sidebar(props: SidebarProps): React.JSX.Element {
@@ -111,6 +112,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
         <SearchPanel
           folderPaths={props.folders.map((f) => f.path)}
           onOpenResult={props.onOpenSearchResult}
+          onError={props.onSearchError}
         />
       )}
       <div

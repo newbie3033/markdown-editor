@@ -4,12 +4,24 @@ import {
   clipboard,
   dialog,
   ipcMain,
+  net,
+  protocol,
   shell,
   type IpcMainInvokeEvent
 } from 'electron'
-import { existsSync, promises as fs, statSync } from 'node:fs'
+import {
+  existsSync,
+  promises as fs,
+  realpathSync,
+  statSync,
+  watch,
+  type FSWatcher,
+  type Stats
+} from 'node:fs'
+import type { FileHandle } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
-import { basename, dirname, extname, join } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   IPC,
   REPOSITORY_URL,
@@ -20,6 +32,7 @@ import {
   type FileVersion,
   type ReadFileResult,
   type RecoveryDraft,
+  type DroppedPathResult,
   type SaveImagePayload,
   type SaveImageResult,
   type SaveResult,
@@ -35,7 +48,137 @@ const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.sv
 
 const MAX_SEARCH_FILES = 300
 const MAX_MATCHES_PER_FILE = 60
+const MAX_TREE_ENTRIES = 5000
+const MAX_SEARCH_FILE_BYTES = 8 * 1024 * 1024
+const MAX_SEARCH_TOTAL_BYTES = 32 * 1024 * 1024
+const MAX_OPEN_FILE_BYTES = 64 * 1024 * 1024
+const MAX_IMAGE_BYTES = 32 * 1024 * 1024
 const RECOVERY_FILE = 'recovery-draft.json'
+const BACKUP_DIR = 'backups'
+const ASSET_ORIGIN = 'inkmark-asset://local'
+
+const IMAGE_MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.avif': 'image/avif'
+}
+
+const grantedFiles = new Set<string>()
+const grantedDirectories = new Set<string>()
+const pendingExportDocuments = new Map<string, string>()
+
+function canonicalPath(path: string): string {
+  const absolute = isAbsolute(path) ? path : resolve(path)
+  try {
+    return realpathSync.native(absolute)
+  } catch {
+    try {
+      return join(realpathSync.native(dirname(absolute)), basename(absolute))
+    } catch {
+      return absolute
+    }
+  }
+}
+
+function isWithin(path: string, root: string): boolean {
+  const rel = relative(root, path)
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+export function grantFileAccess(path: string): void {
+  grantedFiles.add(canonicalPath(path))
+}
+
+export function grantDocumentAccess(path: string): void {
+  const canonical = canonicalPath(path)
+  grantedFiles.add(canonical)
+  // Relative links and local images are part of a Markdown document's normal
+  // working set, so authorize its containing directory—not arbitrary paths.
+  grantedDirectories.add(dirname(canonical))
+}
+
+export function grantDirectoryAccess(path: string): void {
+  grantedDirectories.add(canonicalPath(path))
+}
+
+function assertPathAccess(path: string): string {
+  if (typeof path !== 'string' || !path) throw new TypeError('Invalid filesystem path')
+  const canonical = canonicalPath(path)
+  if (
+    !grantedFiles.has(canonical) &&
+    !Array.from(grantedDirectories).some((root) => isWithin(canonical, root))
+  ) {
+    throw new Error('Filesystem path was not authorized by the user')
+  }
+  return canonical
+}
+
+function pathToAssetUrl(path: string): string {
+  return pathToFileURL(path).href.replace(/^file:\/\//, ASSET_ORIGIN)
+}
+
+function assetUrlToPath(value: string): string {
+  const url = new URL(value)
+  if (url.protocol !== 'inkmark-asset:' || url.hostname !== 'local') {
+    throw new Error('Invalid local asset URL')
+  }
+  const fileUrl = new URL('file:///')
+  fileUrl.pathname = url.pathname
+  return fileURLToPath(fileUrl)
+}
+
+function localImagePath(value: string, documentPath: string): string | null {
+  const src = value.trim()
+  if (!src || /^(?:data:|https?:|blob:|#)/i.test(src)) return null
+  try {
+    if (src.startsWith('inkmark-asset:')) return assetUrlToPath(src)
+    if (src.startsWith('file:')) return fileURLToPath(src)
+  } catch {
+    return null
+  }
+  let decoded = src
+  try {
+    decoded = decodeURIComponent(src)
+  } catch {
+    // Keep a literal percent sequence if the Markdown contains invalid URL encoding.
+  }
+  if (/^[A-Za-z]:[\\/]/.test(decoded) || isAbsolute(decoded)) return canonicalPath(decoded)
+  return canonicalPath(resolve(dirname(documentPath), decoded.replace(/\\/g, sep)))
+}
+
+/** Grant only local image files explicitly referenced by the opened Markdown. */
+function grantReferencedImages(documentPath: string, content: string): void {
+  const sources: string[] = []
+  const markdownImage = /!\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))/g
+  const htmlImage = /<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi
+  for (const match of content.matchAll(markdownImage)) sources.push(match[1] ?? match[2] ?? '')
+  for (const match of content.matchAll(htmlImage)) sources.push(match[1] ?? '')
+  for (const src of sources) {
+    const path = localImagePath(src, documentPath)
+    if (path && IMAGE_EXTENSIONS.has(extname(path).toLowerCase())) grantFileAccess(path)
+  }
+}
+
+function decodeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+}
+
+function assertTextPayload(value: unknown, label: string, maxBytes = MAX_OPEN_FILE_BYTES): string {
+  if (typeof value !== 'string') throw new TypeError(`Invalid ${label}`)
+  if (Buffer.byteLength(value, 'utf8') > maxBytes) throw new Error(`${label} is too large`)
+  return value
+}
 
 const isMarkdown = (name: string): boolean => MARKDOWN_EXTENSIONS.has(extname(name).toLowerCase())
 
@@ -47,8 +190,33 @@ function isAllowedExternalUrl(value: string): boolean {
   }
 }
 
+async function readHandleSnapshot(
+  handle: FileHandle,
+  maxBytes: number
+): Promise<{ data: Buffer; stat: Stats }> {
+  const before = await handle.stat()
+  if (before.size > maxBytes) throw new Error(`File is too large (${before.size} bytes)`)
+  const data = Buffer.allocUnsafe(before.size)
+  let offset = 0
+  while (offset < data.length) {
+    const { bytesRead } = await handle.read(data, offset, data.length - offset, offset)
+    if (bytesRead === 0) break
+    offset += bytesRead
+  }
+  const after = await handle.stat()
+  if (offset !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+    throw new Error('File changed while it was being read')
+  }
+  return { data, stat: after }
+}
+
 async function readUtf8(path: string): Promise<string> {
-  return fs.readFile(path, 'utf8')
+  const handle = await fs.open(path, 'r')
+  try {
+    return (await readHandleSnapshot(handle, MAX_SEARCH_FILE_BYTES)).data.toString('utf8')
+  } finally {
+    await handle.close()
+  }
 }
 
 function sha256(data: string | Uint8Array): string {
@@ -62,12 +230,44 @@ function toFileVersion(stat: { mtimeMs: number; size: number }, hash: string): F
 async function readDocument(path: string): Promise<ReadFileResult> {
   const handle = await fs.open(path, 'r')
   try {
-    const data = await handle.readFile()
-    const version = toFileVersion(await handle.stat(), sha256(data))
-    return { content: data.toString('utf8'), version }
+    const { data, stat } = await readHandleSnapshot(handle, MAX_OPEN_FILE_BYTES)
+    const version = toFileVersion(stat, sha256(data))
+    const content = data.toString('utf8')
+    grantReferencedImages(path, content)
+    return { content, version }
   } finally {
     await handle.close()
   }
+}
+
+class FileConflictError extends Error {}
+
+async function currentVersion(path: string): Promise<FileVersion | null> {
+  try {
+    const handle = await fs.open(path, 'r')
+    try {
+      const stat = await handle.stat()
+      if (stat.size > MAX_OPEN_FILE_BYTES) {
+        // Size/mtime still provide a bounded baseline for a native-dialog
+        // overwrite without reading an arbitrarily large target into memory.
+        return toFileVersion(stat, '<large-file>')
+      }
+      const { data } = await readHandleSnapshot(handle, MAX_OPEN_FILE_BYTES)
+      return toFileVersion(stat, sha256(data))
+    } finally {
+      await handle.close()
+    }
+  } catch {
+    return null
+  }
+}
+
+function sameVersion(left: FileVersion | null, right: FileVersion | null): boolean {
+  return (
+    left?.mtimeMs === right?.mtimeMs &&
+    left?.size === right?.size &&
+    left?.sha256 === right?.sha256
+  )
 }
 
 /**
@@ -78,7 +278,9 @@ async function readDocument(path: string): Promise<ReadFileResult> {
 async function atomicWriteFile(
   path: string,
   data: string | Uint8Array,
-  createMode?: number
+  createMode?: number,
+  expectedVersion?: FileVersion | null,
+  createBackup = false
 ): Promise<FileVersion> {
   // Preserve the behavior of saving through a symlink: replace its target,
   // rather than replacing the symlink itself.
@@ -98,6 +300,36 @@ async function atomicWriteFile(
       await handle.sync()
     } finally {
       await handle.close()
+    }
+
+    // Check as late as possible, after the replacement has been fully
+    // flushed but before it becomes visible. This substantially narrows the
+    // check/write race with other editors.
+    if (expectedVersion !== undefined) {
+      const current = await currentVersion(targetPath)
+      if (!sameVersion(current, expectedVersion)) throw new FileConflictError()
+    }
+
+    if (createBackup && existing && existing.size <= MAX_OPEN_FILE_BYTES) {
+      try {
+        const backupDir = join(app.getPath('userData'), BACKUP_DIR)
+        await fs.mkdir(backupDir, { recursive: true })
+        const backupId = sha256(targetPath)
+        const backupName = `${backupId}.bak`
+        const previous = await fs.readFile(targetPath)
+        await atomicWriteFile(join(backupDir, backupName), previous, 0o600)
+        await fs.chmod(join(backupDir, backupName), 0o600).catch(() => undefined)
+        await atomicWriteFile(
+          join(backupDir, `${backupId}.json`),
+          JSON.stringify({ path: targetPath, backedUpAt: Date.now() }),
+          0o600
+        )
+        await fs.chmod(join(backupDir, `${backupId}.json`), 0o600).catch(() => undefined)
+      } catch (error) {
+        // A backup is defense-in-depth; failure must not prevent an otherwise
+        // safe atomic save to the user's chosen document.
+        console.warn('Failed to create previous-version backup', error)
+      }
     }
 
     await fs.rename(tempPath, targetPath)
@@ -182,12 +414,18 @@ async function searchFiles(
   await collectMarkdownFiles(folderPath, 0, files)
 
   const results: FileSearchResult[] = []
+  let searchedBytes = 0
   for (const file of files) {
     const name = basename(file)
     const nameRegex = compileSearchRegex(query, flags)
     const nameMatch = nameRegex?.test(name) ?? false
     let content = ''
     try {
+      const stat = await fs.stat(file)
+      if (stat.size > MAX_SEARCH_FILE_BYTES || searchedBytes + stat.size > MAX_SEARCH_TOTAL_BYTES) {
+        continue
+      }
+      searchedBytes += stat.size
       content = await readUtf8(file)
     } catch {
       // Skip unreadable files.
@@ -220,8 +458,12 @@ async function searchFiles(
   return results
 }
 
-async function listMarkdownRecursive(dir: string, depth: number): Promise<FileEntry[]> {
-  if (depth > 24) return []
+async function listMarkdownRecursive(
+  dir: string,
+  depth: number,
+  budget: { count: number } = { count: 0 }
+): Promise<FileEntry[]> {
+  if (depth > 24 || budget.count >= MAX_TREE_ENTRIES) return []
   let entries
   try {
     entries = await fs.readdir(dir, { withFileTypes: true })
@@ -231,15 +473,18 @@ async function listMarkdownRecursive(dir: string, depth: number): Promise<FileEn
 
   const result: FileEntry[] = []
   for (const entry of entries) {
+    if (budget.count >= MAX_TREE_ENTRIES) break
     if (entry.name.startsWith('.') || entry.name === 'node_modules') continue
     const fullPath = join(dir, entry.name)
     if (entry.isDirectory()) {
-      const children = await listMarkdownRecursive(fullPath, depth + 1)
+      const children = await listMarkdownRecursive(fullPath, depth + 1, budget)
       // Only include directories that (transitively) contain markdown files.
       if (children.length > 0) {
+        budget.count += 1
         result.push({ name: entry.name, path: fullPath, type: 'directory', children })
       }
     } else if (entry.isFile() && isMarkdown(entry.name)) {
+      budget.count += 1
       result.push({ name: entry.name, path: fullPath, type: 'file' })
     }
   }
@@ -259,10 +504,141 @@ function exportFileName(path: string | null, fallback: string, ext: string): str
   return `${fallback}${ext}`
 }
 
-function toFileUrl(path: string): string {
-  const normalized = path.replace(/\\/g, '/')
-  if (normalized.startsWith('/')) return `file://${normalized}`
-  return `file:///${normalized}`
+/**
+ * Serve local images through a constrained web-like origin. Unlike file://,
+ * every request is checked against the filesystem capabilities granted by an
+ * opened document, folder, picker, or drop operation.
+ */
+export function registerLocalProtocols(): void {
+  protocol.handle('inkmark-asset', async (request) => {
+    try {
+      const path = assertPathAccess(assetUrlToPath(request.url))
+      const ext = extname(path).toLowerCase()
+      if (!IMAGE_EXTENSIONS.has(ext)) return new Response('Unsupported image type', { status: 415 })
+      const stat = await fs.stat(path)
+      if (!stat.isFile() || stat.size > MAX_IMAGE_BYTES) {
+        return new Response('Image unavailable', { status: 404 })
+      }
+      return net.fetch(pathToFileURL(path).href)
+    } catch {
+      return new Response('Image unavailable', { status: 404 })
+    }
+  })
+
+  protocol.handle('inkmark-export', (request) => {
+    const url = new URL(request.url)
+    const id = url.hostname === 'document' ? url.pathname.slice(1) : ''
+    const html = id ? pendingExportDocuments.get(id) : undefined
+    if (!html) return new Response('Export document unavailable', { status: 404 })
+    return new Response(html, {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Security-Policy':
+          "default-src 'none'; style-src 'unsafe-inline'; img-src data: inkmark-asset:"
+      }
+    })
+  })
+}
+
+async function loadExportDocument(window: BrowserWindow, html: string): Promise<void> {
+  const id = randomUUID()
+  pendingExportDocuments.set(id, html)
+  try {
+    await window.loadURL(`inkmark-export://document/${id}`)
+  } finally {
+    pendingExportDocuments.delete(id)
+  }
+}
+
+async function embedLocalImages(
+  html: string,
+  documentPath: string | null
+): Promise<string> {
+  const sourcePattern = /(\bsrc=")([^"]+)(")/g
+  const matches = Array.from(html.matchAll(sourcePattern))
+  const replacements = new Map<string, string>()
+  let totalBytes = 0
+
+  for (const match of matches) {
+    const encodedSrc = match[2]
+    if (replacements.has(encodedSrc)) continue
+    const src = decodeHtmlAttribute(encodedSrc)
+    if (/^(?:data:|https?:|blob:)/i.test(src)) continue
+    if (!documentPath && !/^(?:file:|inkmark-asset:|[A-Za-z]:[\\/]|\/)/i.test(src)) continue
+    try {
+      const path = documentPath
+        ? localImagePath(src, documentPath)
+        : src.startsWith('inkmark-asset:')
+          ? assetUrlToPath(src)
+          : src.startsWith('file:')
+            ? fileURLToPath(src)
+            : canonicalPath(src)
+      if (!path) continue
+      const authorized = assertPathAccess(path)
+      const ext = extname(authorized).toLowerCase()
+      const mime = IMAGE_MIME_TYPES[ext]
+      if (!mime) continue
+      const handle = await fs.open(authorized, 'r')
+      let data: Buffer
+      try {
+        data = (await readHandleSnapshot(handle, MAX_IMAGE_BYTES)).data
+      } finally {
+        await handle.close()
+      }
+      totalBytes += data.byteLength
+      if (totalBytes > MAX_IMAGE_BYTES) throw new Error('Export images are too large')
+      replacements.set(encodedSrc, `data:${mime};base64,${data.toString('base64')}`)
+    } catch (error) {
+      // A stale/missing image should render as broken in the export, not abort
+      // the entire document. Keep deliberate resource-limit failures fatal.
+      if (error instanceof Error && error.message === 'Export images are too large') throw error
+    }
+  }
+
+  return html.replace(sourcePattern, (whole, prefix: string, src: string, suffix: string) => {
+    const embedded = replacements.get(src)
+    return embedded ? `${prefix}${embedded}${suffix}` : whole
+  })
+}
+
+/** Resolve local image references to the constrained protocol for PDF/Print. */
+async function routeLocalImages(
+  html: string,
+  documentPath: string | null
+): Promise<string> {
+  const sourcePattern = /(\bsrc=")([^"]+)(")/g
+  const replacements = new Map<string, string>()
+
+  for (const match of html.matchAll(sourcePattern)) {
+    const encodedSrc = match[2]
+    if (replacements.has(encodedSrc)) continue
+    const src = decodeHtmlAttribute(encodedSrc)
+    if (/^(?:data:|https?:|blob:)/i.test(src)) continue
+    if (!documentPath && !/^(?:file:|inkmark-asset:|[A-Za-z]:[\\/]|\/)/i.test(src)) continue
+    try {
+      const path = documentPath
+        ? localImagePath(src, documentPath)
+        : src.startsWith('inkmark-asset:')
+          ? assetUrlToPath(src)
+          : src.startsWith('file:')
+            ? fileURLToPath(src)
+            : canonicalPath(src)
+      if (!path) continue
+      const authorized = assertPathAccess(path)
+      if (!IMAGE_EXTENSIONS.has(extname(authorized).toLowerCase())) continue
+      const stat = await fs.stat(authorized)
+      if (!stat.isFile() || stat.size > MAX_IMAGE_BYTES) continue
+      replacements.set(encodedSrc, pathToAssetUrl(authorized))
+    } catch {
+      // Match browser behavior: leave a stale/unauthorized image broken while
+      // continuing to export the rest of the document.
+    }
+  }
+
+  return html.replace(sourcePattern, (whole, prefix: string, src: string, suffix: string) => {
+    const routed = replacements.get(src)
+    return routed ? `${prefix}${routed}${suffix}` : whole
+  })
 }
 
 function sanitizeFileName(name: string): string {
@@ -288,32 +664,54 @@ async function writeUniqueFile(dir: string, name: string, data: Uint8Array): Pro
 }
 
 async function saveImage(payload: SaveImagePayload): Promise<SaveImageResult | null> {
-  const name = sanitizeFileName(payload.name)
-  const buffer = payload.sourcePath
-    ? await fs.readFile(payload.sourcePath)
-    : payload.data
-      ? Buffer.from(payload.data)
-      : null
-  if (!buffer) return null
-
-  if (payload.docPath) {
-    // Save next to the document (Typora-like): <doc dir>/assets/<name>.
-    const docDir = dirname(payload.docPath)
-    const targetDir = join(docDir, 'assets')
-    await fs.mkdir(targetDir, { recursive: true })
-    const targetName = await writeUniqueFile(targetDir, name, buffer)
-    return { src: `assets/${targetName.replace(/\\/g, '/')}` }
+  if (!payload || typeof payload !== 'object') {
+    throw new TypeError('Invalid image payload')
   }
+  const hasData = payload.data instanceof ArrayBuffer
+  const hasSource = typeof payload.sourcePath === 'string' && payload.sourcePath.length > 0
+  if (hasData === hasSource) throw new TypeError('Provide exactly one image source')
+  if (!payload.docPath) throw new Error('Save the document before inserting images')
 
-  // No document yet: store under the app data directory and use an absolute URL.
-  const targetDir = join(app.getPath('userData'), 'images')
+  const docDir = dirname(assertPathAccess(payload.docPath))
+  let name: string
+  let buffer: Buffer
+  if (hasSource) {
+    const sourcePath = assertPathAccess(payload.sourcePath as string)
+    name = sanitizeFileName(basename(sourcePath))
+    if (!IMAGE_EXTENSIONS.has(extname(name).toLowerCase())) throw new Error('Unsupported image type')
+    const existingRelative = relative(docDir, sourcePath)
+    if (existingRelative && !existingRelative.startsWith('..') && !isAbsolute(existingRelative)) {
+      return { src: existingRelative.split(sep).join('/') }
+    }
+    const handle = await fs.open(sourcePath, 'r')
+    try {
+      buffer = (await readHandleSnapshot(handle, MAX_IMAGE_BYTES)).data
+    } finally {
+      await handle.close()
+    }
+  } else {
+    if (typeof payload.name !== 'string') throw new TypeError('Invalid clipboard image name')
+    name = sanitizeFileName(payload.name)
+    if ((payload.data as ArrayBuffer).byteLength > MAX_IMAGE_BYTES) throw new Error('Image is too large')
+    buffer = Buffer.from(payload.data as ArrayBuffer)
+  }
+  if (!IMAGE_EXTENSIONS.has(extname(name).toLowerCase())) {
+    throw new Error('Unsupported image type')
+  }
+  if (buffer.byteLength > MAX_IMAGE_BYTES) throw new Error('Image is too large')
+
+  // Save next to the document (Typora-like): <doc dir>/assets/<name>.
+  const targetDir = join(docDir, 'assets')
   await fs.mkdir(targetDir, { recursive: true })
   const targetName = await writeUniqueFile(targetDir, name, buffer)
-  return { src: toFileUrl(join(targetDir, targetName)) }
+  return { src: `assets/${targetName.replace(/\\/g, '/')}` }
 }
 
 export function registerIpc(getWindow: () => BrowserWindow | null): void {
   let recoveryQueue: Promise<void> = Promise.resolve()
+  let watchedFile: FSWatcher | null = null
+  let watchedPath: string | null = null
+  let watchTimer: NodeJS.Timeout | null = null
   const queueRecovery = (task: () => Promise<void>): Promise<void> => {
     const run = recoveryQueue.then(task, task)
     recoveryQueue = run.catch(() => undefined)
@@ -354,14 +752,21 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
     if (result.canceled || result.filePaths.length === 0) return { canceled: true }
     const path = result.filePaths[0]
+    grantDocumentAccess(path)
     const { content, version } = await readDocument(path)
     return { path, content, version, canceled: false }
   })
 
   handle(
     IPC.saveFileDialog,
-    async (_event, defaultPath: string | null, content: string): Promise<SaveResult> => {
+    async (
+      _event,
+      defaultPath: string | null,
+      content: string,
+      expectedVersion?: FileVersion | null
+    ): Promise<SaveResult> => {
       const win = getWindow()
+      content = assertTextPayload(content, 'document')
       const options = {
         title: t('dialog.saveFile'),
         defaultPath: defaultPath ?? 'untitled.md',
@@ -374,12 +779,43 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         ? await dialog.showSaveDialog(win, options)
         : await dialog.showSaveDialog(options)
       if (result.canceled || !result.filePath) return { canceled: true }
-      const version = await atomicWriteFile(result.filePath, content)
-      return { path: result.filePath, version, canceled: false }
+      const path = result.filePath
+      const selectedCurrentPath = defaultPath != null && canonicalPath(defaultPath) === canonicalPath(path)
+      // For a different target, the native dialog has already asked for
+      // overwrite consent; snapshot its state now to catch changes occurring
+      // after that confirmation and before the final rename.
+      const baseline = selectedCurrentPath ? expectedVersion : await currentVersion(path)
+      try {
+        const version = await atomicWriteFile(path, content, undefined, baseline, true)
+        grantDocumentAccess(path)
+        return { path, version, canceled: false, conflict: false }
+      } catch (error) {
+        if (error instanceof FileConflictError) return { path, canceled: false, conflict: true }
+        throw error
+      }
     }
   )
 
-  handle(IPC.readFile, async (_event, path: string): Promise<ReadFileResult> => readDocument(path))
+  handle(IPC.authorizeDroppedPath, async (_event, path: string): Promise<DroppedPathResult> => {
+    const canonical = canonicalPath(path)
+    const stat = await fs.stat(canonical)
+    if (stat.isDirectory()) grantDirectoryAccess(canonical)
+    else if (isMarkdown(basename(canonical))) grantDocumentAccess(canonical)
+    else grantFileAccess(canonical)
+    return {
+      path: canonical,
+      isDirectory: stat.isDirectory()
+    }
+  })
+
+  handle(IPC.documentBaseUrl, async (_event, path: string): Promise<string> => {
+    const documentPath = assertPathAccess(path)
+    return pathToAssetUrl(dirname(documentPath) + sep)
+  })
+
+  handle(IPC.readFile, async (_event, path: string): Promise<ReadFileResult> =>
+    readDocument(assertPathAccess(path))
+  )
 
   handle(IPC.writeFile, async (
     _event,
@@ -387,6 +823,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     content: string,
     expectedVersion?: FileVersion | null
   ): Promise<WriteFileResult> => {
+    path = assertPathAccess(path)
+    content = assertTextPayload(content, 'document')
     if (expectedVersion) {
       const current = await readDocument(path).then((result) => result.version).catch(() => null)
       if (
@@ -398,7 +836,38 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         return { conflict: true }
       }
     }
-    return { conflict: false, version: await atomicWriteFile(path, content) }
+    try {
+      return {
+        conflict: false,
+        version: await atomicWriteFile(path, content, undefined, expectedVersion, true)
+      }
+    } catch (error) {
+      if (error instanceof FileConflictError) return { conflict: true }
+      throw error
+    }
+  })
+
+  handle(IPC.watchFile, async (_event, path: string | null): Promise<void> => {
+    watchedFile?.close()
+    watchedFile = null
+    watchedPath = null
+    if (watchTimer) clearTimeout(watchTimer)
+    watchTimer = null
+    if (!path) return
+    const canonical = assertPathAccess(path)
+    watchedPath = canonical
+    watchedFile = watch(dirname(canonical), { persistent: false }, (_eventType, fileName) => {
+      if (fileName && String(fileName) !== basename(canonical)) return
+      if (watchTimer) clearTimeout(watchTimer)
+      watchTimer = setTimeout(() => {
+        const win = getWindow()
+        if (win && watchedPath) win.webContents.send(IPC.fileChanged, watchedPath)
+      }, 250)
+    })
+    watchedFile.on('error', () => {
+      watchedFile?.close()
+      watchedFile = null
+    })
   })
 
   handle(IPC.openFolderDialog, async () => {
@@ -409,14 +878,23 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     }
     const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
     if (result.canceled || result.filePaths.length === 0) return { canceled: true }
+    grantDirectoryAccess(result.filePaths[0])
     return { path: result.filePaths[0], canceled: false }
   })
 
   handle(IPC.listMarkdown, async (_event, folderPath: string): Promise<FileEntry[]> =>
-    listMarkdownRecursive(folderPath, 0)
+    listMarkdownRecursive(assertPathAccess(folderPath), 0)
   )
 
-  handle(IPC.exportHtml, async (_event, defaultName: string, html: string): Promise<SaveResult> => {
+  handle(IPC.exportHtml, async (
+    _event,
+    defaultName: string,
+    html: string,
+    documentPath: string | null
+  ): Promise<SaveResult> => {
+    html = assertTextPayload(html, 'HTML export')
+    if (documentPath) documentPath = assertPathAccess(documentPath)
+    html = await embedLocalImages(html, documentPath)
     const win = getWindow()
     const options = {
       title: t('dialog.exportHtml'),
@@ -431,7 +909,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return { path: result.filePath, version, canceled: false }
   })
 
-  handle(IPC.exportPdf, async (_event, defaultName: string, html: string): Promise<SaveResult> => {
+  handle(IPC.exportPdf, async (
+    _event,
+    defaultName: string,
+    html: string,
+    documentPath: string | null
+  ): Promise<SaveResult> => {
+    html = assertTextPayload(html, 'PDF export')
+    if (documentPath) documentPath = assertPathAccess(documentPath)
+    html = await routeLocalImages(html, documentPath)
     const win = getWindow()
     const options = {
       title: t('dialog.exportPdf'),
@@ -445,10 +931,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
     const pdfWindow = new BrowserWindow({
       show: false,
-      webPreferences: { sandbox: true, offscreen: true }
+      webPreferences: { sandbox: true, offscreen: true, javascript: false }
     })
     try {
-      await pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+      await loadExportDocument(pdfWindow, html)
       const data = await pdfWindow.webContents.printToPDF({
         printBackground: true,
         pageSize: 'A4',
@@ -461,19 +947,32 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     }
   })
 
-  handle(IPC.exportPrint, async (_event, html: string): Promise<void> => {
+  handle(IPC.exportPrint, async (
+    _event,
+    html: string,
+    documentPath: string | null
+  ): Promise<void> => {
+    html = assertTextPayload(html, 'print document')
+    if (documentPath) documentPath = assertPathAccess(documentPath)
+    html = await routeLocalImages(html, documentPath)
     const printWindow = new BrowserWindow({
       show: false,
-      webPreferences: { sandbox: true }
+      webPreferences: { sandbox: true, javascript: false }
     })
-    await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
-    printWindow.webContents.print(
-      { printBackground: true, silent: false },
-      (_success: boolean, failureReason: string) => {
-        if (failureReason) console.error('Print failed:', failureReason)
-        printWindow.destroy()
-      }
-    )
+    try {
+      await loadExportDocument(printWindow, html)
+      await new Promise<void>((resolvePrint, rejectPrint) => {
+        printWindow.webContents.print(
+          { printBackground: true, silent: false },
+          (success: boolean, failureReason: string) => {
+            if (success) resolvePrint()
+            else rejectPrint(new Error(failureReason || 'Print failed'))
+          }
+        )
+      })
+    } finally {
+      printWindow.destroy()
+    }
   })
 
   handle(IPC.saveImage, async (_event, payload: SaveImagePayload): Promise<SaveImageResult | null> =>
@@ -494,13 +993,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     }
     const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
     if (result.canceled || result.filePaths.length === 0) return { canceled: true }
-    return { path: result.filePaths[0], canceled: false }
+    const path = canonicalPath(result.filePaths[0])
+    grantFileAccess(path)
+    return { path, canceled: false }
   })
 
   handle(
     IPC.searchFiles,
     async (_event, folderPath: string, query: string, flags: SearchFlags = {}): Promise<FileSearchResult[]> =>
-      searchFiles(folderPath, query, flags)
+      searchFiles(assertPathAccess(folderPath), query, flags)
   )
 
   handle(IPC.confirmSave, async (_event, fileName: string) => {
@@ -515,6 +1016,20 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     }
     const result = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
     return (['save', 'discard', 'cancel'] as const)[result.response]
+  })
+
+  handle(IPC.confirmExternalChange, async (_event, fileName: string, dirty: boolean) => {
+    const win = getWindow()
+    const options = {
+      type: 'warning' as const,
+      buttons: [t('dialog.reload'), t('menu.saveAs'), t('dialog.keepEditing')],
+      defaultId: dirty ? 2 : 0,
+      cancelId: 2,
+      message: t('dialog.externalChangedTitle'),
+      detail: t('dialog.externalChangedDetail').replace('{name}', fileName)
+    }
+    const result = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
+    return (['reload', 'saveAs', 'keep'] as const)[result.response]
   })
 
   handle(IPC.showError, async (_event, message: string, detail?: string): Promise<void> => {
@@ -546,7 +1061,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     await recoveryQueue
     try {
       const parsed = JSON.parse(await fs.readFile(recoveryPath(), 'utf8')) as unknown
-      return isRecoveryDraft(parsed) ? parsed : null
+      if (!isRecoveryDraft(parsed)) return null
+      if (parsed.filePath) grantDocumentAccess(parsed.filePath)
+      return parsed
     } catch {
       return null
     }
@@ -569,6 +1086,23 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     })
   })
 
+  handle(IPC.confirmRecovery, async (_event, fileName: string, updatedAt: number) => {
+    const win = getWindow()
+    const when = new Date(updatedAt).toLocaleString(getLocale() === 'zh' ? 'zh-CN' : 'en-US')
+    const options = {
+      type: 'question' as const,
+      buttons: [t('dialog.restore'), t('dialog.discardDraft')],
+      defaultId: 0,
+      cancelId: 0,
+      message: t('dialog.recoveryTitle'),
+      detail: t('dialog.recoveryDetail')
+        .replace('{name}', fileName)
+        .replace('{time}', when)
+    }
+    const result = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
+    return (['restore', 'discard'] as const)[result.response]
+  })
+
   handle(IPC.openExternal, async (_event, url: string): Promise<void> => {
     if (isAllowedExternalUrl(url)) {
       await shell.openExternal(url)
@@ -576,14 +1110,20 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   handle(IPC.openLocalPath, async (_event, path: string): Promise<string> =>
-    shell.openPath(path)
+    shell.openPath(assertPathAccess(path))
   )
 
-  handle(IPC.pathExists, async (_event, path: string): Promise<boolean> => existsSync(path))
+  handle(IPC.pathExists, async (_event, path: string): Promise<boolean> => {
+    try {
+      return existsSync(assertPathAccess(path))
+    } catch {
+      return false
+    }
+  })
 
   handle(IPC.pathIsDirectory, async (_event, path: string): Promise<boolean> => {
     try {
-      return statSync(path).isDirectory()
+      return statSync(assertPathAccess(path)).isDirectory()
     } catch {
       return false
     }

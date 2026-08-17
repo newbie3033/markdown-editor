@@ -82,7 +82,11 @@ const dict = {
     'status.editMode': 'Edit mode',
     'status.readOnlySuffix': ' (read-only)',
     'error.saveFailed': 'Could not save the document. Your edits are still open.',
-    'error.fileChanged': 'The file changed on disk. It was not overwritten; use Save As or reopen it.'
+    'error.fileChanged': 'The file changed on disk. It was not overwritten; use Save As or reopen it.',
+    'error.openFailed': 'Could not open the requested file or folder.',
+    'error.exportFailed': 'Could not export or print the document.',
+    'error.imageFailed': 'Could not insert the image.',
+    'error.recoveryFailed': 'Crash recovery could not be updated.'
   },
   zh: {
     'files.openFolder': '打开文件夹',
@@ -164,7 +168,11 @@ const dict = {
     'status.editMode': '编辑模式',
     'status.readOnlySuffix': '（只读）',
     'error.saveFailed': '无法保存文档，当前编辑内容仍保留在窗口中。',
-    'error.fileChanged': '文件已被其他程序修改，因此没有覆盖。请另存为或重新打开文件。'
+    'error.fileChanged': '文件已被其他程序修改，因此没有覆盖。请另存为或重新打开文件。',
+    'error.openFailed': '无法打开指定的文件或文件夹。',
+    'error.exportFailed': '无法导出或打印文档。',
+    'error.imageFailed': '无法插入图片。',
+    'error.recoveryFailed': '无法更新崩溃恢复草稿。'
   }
 } as const
 

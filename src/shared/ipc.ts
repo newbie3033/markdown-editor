@@ -15,6 +15,7 @@ export interface SaveResult {
   path?: string
   version?: FileVersion
   canceled: boolean
+  conflict?: boolean
 }
 
 export interface FileVersion {
@@ -55,24 +56,29 @@ export interface FileEntry {
 }
 
 export interface SaveImagePayload {
-  /** Absolute path of the source file (drag-drop from the OS), if available. */
-  sourcePath?: string | null
-  /** Raw bytes of the image (clipboard paste), if there is no source path. */
-  data?: ArrayBuffer | null
-  /** Original file name, used as the saved file name. */
-  name: string
+  /** Raw bytes of a clipboard image, which has no stable source path. */
+  data?: ArrayBuffer
+  /** An OS-backed image explicitly selected or dropped by the user. */
+  sourcePath?: string
+  /** Original file name, used for clipboard image data. */
+  name?: string
   /** Path of the current document, used to resolve the assets directory. */
-  docPath: string | null
+  docPath: string
 }
 
 export interface SaveImageResult {
-  /** src to insert into the editor (relative to the doc, or absolute). */
+  /** Portable src to insert into Markdown, relative to the document. */
   src: string
 }
 
 export interface PickImageResult {
   path?: string
   canceled: boolean
+}
+
+export interface DroppedPathResult {
+  path: string
+  isDirectory: boolean
 }
 
 export interface SearchMatch {
@@ -113,8 +119,22 @@ export interface SearchFlags {
  */
 export function compileSearchRegex(query: string, flags: SearchFlags = {}): RegExp | null {
   const q = query.trim()
-  if (!q) return null
+  if (!q || q.length > 256) return null
   try {
+    if (flags.regex) {
+      // Regexes run against user files and the active document. Reject the
+      // most common exponential-backtracking shapes instead of allowing one
+      // query to freeze the Electron main/renderer thread.
+      const structural = q
+        .replace(/\\./g, '')
+        .replace(/\[(?:\\.|[^\]])*\]/g, '')
+      if (
+        /\([^)]*(?:\*|\+|\{\d+(?:,\d*)?\})[^)]*\)(?:\*|\+|\{\d+(?:,\d*)?\})/.test(structural) ||
+        /(?:\.\*){2,}|(?:\.\+){2,}|\\[1-9]/.test(structural)
+      ) {
+        return null
+      }
+    }
     let pattern = flags.regex ? q : q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     if (flags.wholeWord) {
       pattern = `(?<![\\p{L}\\p{N}_])(?:${pattern})(?![\\p{L}\\p{N}_])`
@@ -160,8 +180,13 @@ export type MenuAction =
 export const IPC = {
   openFileDialog: 'file:open-dialog',
   saveFileDialog: 'file:save-dialog',
+  authorizeDroppedPath: 'file:authorize-dropped-path',
+  documentBaseUrl: 'file:document-base-url',
   readFile: 'file:read',
   writeFile: 'file:write',
+  watchFile: 'file:watch',
+  fileChanged: 'file:changed',
+  confirmExternalChange: 'file:confirm-external-change',
   openFolderDialog: 'folder:open-dialog',
   listMarkdown: 'folder:list-markdown',
   exportHtml: 'export:html',
@@ -177,6 +202,7 @@ export const IPC = {
   loadRecoveryDraft: 'recovery:load',
   saveRecoveryDraft: 'recovery:save',
   clearRecoveryDraft: 'recovery:clear',
+  confirmRecovery: 'recovery:confirm',
   openExternal: 'app:open-external',
   openLocalPath: 'app:open-local-path',
   pathExists: 'app:path-exists',
@@ -199,20 +225,32 @@ export const IPC = {
 } as const
 
 export type SaveChoice = 'save' | 'discard' | 'cancel'
+export type RecoveryChoice = 'restore' | 'discard'
+export type ExternalChangeChoice = 'reload' | 'saveAs' | 'keep'
 
 /** Open-source repository URL (shown in the About dialog and Help menu). */
 export const REPOSITORY_URL = 'https://github.com/newbie3033/markdown-editor'
 
 export interface InkMarkApi {
   openFileDialog(): Promise<FileResult>
-  saveFileDialog(defaultPath: string | null, content: string): Promise<SaveResult>
+  saveFileDialog(
+    defaultPath: string | null,
+    content: string,
+    expectedVersion?: FileVersion | null
+  ): Promise<SaveResult>
+  authorizeDroppedFile(file: File): Promise<DroppedPathResult | null>
+  /** Test harness only; throws unless INKMARK_SELFTEST=1. */
+  queueSelfTestDroppedPath(path: string): void
   readFile(path: string): Promise<ReadFileResult>
+  getDocumentBaseUrl(path: string): Promise<string>
   writeFile(path: string, content: string, expectedVersion?: FileVersion | null): Promise<WriteFileResult>
+  watchFile(path: string | null): Promise<void>
+  confirmExternalChange(fileName: string, dirty: boolean): Promise<ExternalChangeChoice>
   openFolderDialog(): Promise<FolderResult>
   listMarkdown(folderPath: string): Promise<FileEntry[]>
-  exportHtml(defaultName: string, html: string): Promise<SaveResult>
-  exportPdf(defaultName: string, html: string): Promise<SaveResult>
-  exportPrint(html: string): Promise<void>
+  exportHtml(defaultName: string, html: string, documentPath: string | null): Promise<SaveResult>
+  exportPdf(defaultName: string, html: string, documentPath: string | null): Promise<SaveResult>
+  exportPrint(html: string, documentPath: string | null): Promise<void>
   saveImage(payload: SaveImagePayload): Promise<SaveImageResult | null>
   pickImage(): Promise<PickImageResult>
   searchFiles(folderPath: string, query: string, flags?: SearchFlags): Promise<FileSearchResult[]>
@@ -222,7 +260,6 @@ export interface InkMarkApi {
   openLocalPath(path: string): Promise<string>
   pathExists(path: string): Promise<boolean>
   pathIsDirectory(path: string): Promise<boolean>
-  getPathForFile(file: File): string
   getZoom(): Promise<number>
   setZoom(level: number): Promise<void>
   showAbout(): Promise<void>
@@ -232,10 +269,12 @@ export interface InkMarkApi {
   loadRecoveryDraft(): Promise<RecoveryDraft | null>
   saveRecoveryDraft(draft: RecoveryDraft): Promise<void>
   clearRecoveryDraft(): Promise<void>
+  confirmRecovery(fileName: string, updatedAt: number): Promise<RecoveryChoice>
   getLocale(): Promise<Lang>
   setLocale(lang: Lang): Promise<void>
   onMenuAction(callback: (action: MenuAction) => void): () => void
   onOpenPath(callback: (path: string) => void): () => void
+  onFileChanged(callback: (path: string) => void): () => void
   onCloseRequest(callback: () => void): () => void
   closeConfirmed(): void
   rendererReady(): void

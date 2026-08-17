@@ -75,20 +75,17 @@ export function isAbsolutePath(path: string): boolean {
   return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
 }
 
-type FileWithPath = File & { path?: string }
-
 /**
- * Resolve the filesystem path of a dropped file. Prefers the official
- * `webUtils.getPathForFile` API (the `File.path` augmentation was removed in
- * newer Electron versions) and falls back to the legacy property.
- * Returns '' for clipboard-only files (no filesystem backing).
+ * Resolve and authorize an OS-backed dropped file in the preload. Keeping
+ * webUtils out of the renderer prevents arbitrary strings from being treated
+ * as user-approved filesystem paths.
  */
-export function filePathOf(file: File): string {
+export async function authorizeDroppedFile(
+  file: File
+): Promise<{ path: string; isDirectory: boolean; url?: string } | null> {
   try {
-    const resolved = window.api.getPathForFile(file)
-    if (resolved) return resolved
+    return await window.api.authorizeDroppedFile(file)
   } catch {
-    // getPathForFile unavailable — fall through to the legacy property.
+    return null
   }
-  return (file as FileWithPath).path ?? ''
 }

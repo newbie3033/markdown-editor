@@ -20,13 +20,43 @@ import {
   type RecoveryDraft
 } from '../shared/ipc'
 
+const selfTestDroppedPaths: string[] = []
+
 const api: InkMarkApi = {
   openFileDialog: (): Promise<FileResult> => ipcRenderer.invoke(IPC.openFileDialog),
 
-  saveFileDialog: (defaultPath: string | null, content: string): Promise<SaveResult> =>
-    ipcRenderer.invoke(IPC.saveFileDialog, defaultPath, content),
+  saveFileDialog: (
+    defaultPath: string | null,
+    content: string,
+    expectedVersion?: FileVersion | null
+  ): Promise<SaveResult> =>
+    ipcRenderer.invoke(IPC.saveFileDialog, defaultPath, content, expectedVersion),
+
+  authorizeDroppedFile: async (file: File) => {
+    let path = ''
+    try {
+      path = webUtils.getPathForFile(file)
+    } catch {}
+    // Synthetic File objects do not carry an OS path across contextBridge.
+    // The explicit queue is available only to the packaged self-test.
+    if (!path && process.env['INKMARK_SELFTEST'] === '1') {
+      path = selfTestDroppedPaths.shift() ?? ''
+    }
+    if (!path) return null
+    return ipcRenderer.invoke(IPC.authorizeDroppedPath, path)
+  },
+
+  queueSelfTestDroppedPath: (path: string): void => {
+    if (process.env['INKMARK_SELFTEST'] !== '1') {
+      throw new Error('Self-test drop paths are disabled')
+    }
+    selfTestDroppedPaths.push(path)
+  },
 
   readFile: (path: string): Promise<ReadFileResult> => ipcRenderer.invoke(IPC.readFile, path),
+
+  getDocumentBaseUrl: (path: string): Promise<string> =>
+    ipcRenderer.invoke(IPC.documentBaseUrl, path),
 
   writeFile: (
     path: string,
@@ -34,18 +64,24 @@ const api: InkMarkApi = {
     expectedVersion?: FileVersion | null
   ): Promise<WriteFileResult> => ipcRenderer.invoke(IPC.writeFile, path, content, expectedVersion),
 
+  watchFile: (path: string | null): Promise<void> => ipcRenderer.invoke(IPC.watchFile, path),
+
+  confirmExternalChange: (fileName: string, dirty: boolean) =>
+    ipcRenderer.invoke(IPC.confirmExternalChange, fileName, dirty),
+
   openFolderDialog: (): Promise<FolderResult> => ipcRenderer.invoke(IPC.openFolderDialog),
 
   listMarkdown: (folderPath: string): Promise<FileEntry[]> =>
     ipcRenderer.invoke(IPC.listMarkdown, folderPath),
 
-  exportHtml: (defaultName: string, html: string): Promise<SaveResult> =>
-    ipcRenderer.invoke(IPC.exportHtml, defaultName, html),
+  exportHtml: (defaultName: string, html: string, documentPath: string | null): Promise<SaveResult> =>
+    ipcRenderer.invoke(IPC.exportHtml, defaultName, html, documentPath),
 
-  exportPdf: (defaultName: string, html: string): Promise<SaveResult> =>
-    ipcRenderer.invoke(IPC.exportPdf, defaultName, html),
+  exportPdf: (defaultName: string, html: string, documentPath: string | null): Promise<SaveResult> =>
+    ipcRenderer.invoke(IPC.exportPdf, defaultName, html, documentPath),
 
-  exportPrint: (html: string): Promise<void> => ipcRenderer.invoke(IPC.exportPrint, html),
+  exportPrint: (html: string, documentPath: string | null): Promise<void> =>
+    ipcRenderer.invoke(IPC.exportPrint, html, documentPath),
 
   saveImage: (payload: SaveImagePayload): Promise<SaveImageResult | null> =>
     ipcRenderer.invoke(IPC.saveImage, payload),
@@ -68,14 +104,6 @@ const api: InkMarkApi = {
 
   pathIsDirectory: (path: string): Promise<boolean> => ipcRenderer.invoke(IPC.pathIsDirectory, path),
 
-  getPathForFile: (file: File): string => {
-    try {
-      return webUtils.getPathForFile(file)
-    } catch {
-      return ''
-    }
-  },
-
   getZoom: (): Promise<number> => ipcRenderer.invoke(IPC.getZoom),
 
   setZoom: (level: number): Promise<void> => ipcRenderer.invoke(IPC.setZoom, level),
@@ -95,6 +123,9 @@ const api: InkMarkApi = {
 
   clearRecoveryDraft: (): Promise<void> => ipcRenderer.invoke(IPC.clearRecoveryDraft),
 
+  confirmRecovery: (fileName: string, updatedAt: number) =>
+    ipcRenderer.invoke(IPC.confirmRecovery, fileName, updatedAt),
+
   getLocale: (): Promise<Lang> => ipcRenderer.invoke(IPC.getLocale),
 
   setLocale: (lang: Lang): Promise<void> => ipcRenderer.invoke(IPC.setLocale, lang),
@@ -110,6 +141,12 @@ const api: InkMarkApi = {
     const listener = (_event: Electron.IpcRendererEvent, path: string): void => callback(path)
     ipcRenderer.on(IPC.openPath, listener)
     return () => ipcRenderer.removeListener(IPC.openPath, listener)
+  },
+
+  onFileChanged: (callback: (path: string) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, path: string): void => callback(path)
+    ipcRenderer.on(IPC.fileChanged, listener)
+    return () => ipcRenderer.removeListener(IPC.fileChanged, listener)
   },
 
   onCloseRequest: (callback: () => void): (() => void) => {

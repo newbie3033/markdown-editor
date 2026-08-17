@@ -13,23 +13,25 @@ import { upload, uploadConfig, type Uploader } from '@milkdown/kit/plugin/upload
 import { outline } from '@milkdown/kit/utils'
 import { prism } from '@milkdown/plugin-prism'
 import { codeBlockCopyPlugin } from '../lib/codeBlockCopy'
+import { localImageViewPlugin } from '../lib/imageView'
 import { createTyporaKeymap } from '../lib/typoraKeymap'
 import type { OutlineItem } from '../lib/markdown'
-import { filePathOf, isImageFileName, isMarkdownFileName } from '../lib/markdown'
+import { authorizeDroppedFile, isImageFileName, isMarkdownFileName } from '../lib/markdown'
 
 interface EditorProps {
   initialMarkdown: string
   onReady: (editor: Editor) => void
   onChange: (markdown: string) => void
   onOutline: (items: OutlineItem[]) => void
-  /** Returns the path of the currently open document (or null). */
-  getDocPath: () => string | null
+  /** Saves an untitled document before creating a relative image asset. */
+  ensureDocPath: () => Promise<string | null>
   /** Called when a markdown file is dropped/pasted into the editor. */
   onOpenDocument: (path: string) => void
   /** Called when a folder is dropped into the editor. */
   onOpenFolder: (path: string) => void
   /** Whether the editor is in read-only mode (blocks image insertion). */
   isReadOnly: () => boolean
+  onImageError: (error: unknown) => void
 }
 
 function InnerEditor({
@@ -37,26 +39,29 @@ function InnerEditor({
   onReady,
   onChange,
   onOutline,
-  getDocPath,
+  ensureDocPath,
   onOpenDocument,
   onOpenFolder,
-  isReadOnly
+  isReadOnly,
+  onImageError
 }: EditorProps): React.JSX.Element {
   const initialRef = useRef(initialMarkdown)
   const onReadyRef = useRef(onReady)
   const onChangeRef = useRef(onChange)
   const onOutlineRef = useRef(onOutline)
-  const getDocPathRef = useRef(getDocPath)
+  const ensureDocPathRef = useRef(ensureDocPath)
   const onOpenDocumentRef = useRef(onOpenDocument)
   const onOpenFolderRef = useRef(onOpenFolder)
   const isReadOnlyRef = useRef(isReadOnly)
+  const onImageErrorRef = useRef(onImageError)
   onReadyRef.current = onReady
   onChangeRef.current = onChange
   onOutlineRef.current = onOutline
-  getDocPathRef.current = getDocPath
+  ensureDocPathRef.current = ensureDocPath
   onOpenDocumentRef.current = onOpenDocument
   onOpenFolderRef.current = onOpenFolder
   isReadOnlyRef.current = isReadOnly
+  onImageErrorRef.current = onImageError
 
   const uploaderRef = useRef<Uploader | null>(null)
   if (!uploaderRef.current) {
@@ -66,10 +71,11 @@ function InnerEditor({
         const file = files.item(i)
         if (!file) continue
         const name = file.name
-        const path = filePathOf(file)
+        const dropped = await authorizeDroppedFile(file)
+        const path = dropped?.path ?? ''
 
         // Folders dropped into the editor are opened in the sidebar.
-        if (path && (await window.api.pathIsDirectory(path))) {
+        if (dropped?.isDirectory) {
           onOpenFolderRef.current(path)
           continue
         }
@@ -83,16 +89,21 @@ function InnerEditor({
         if (!(file.type.startsWith('image/') || isImageFileName(name))) continue
         if (isReadOnlyRef.current()) continue
 
-        const data = path ? null : await file.arrayBuffer()
-        const result = await window.api.saveImage({
-          sourcePath: path || null,
-          data,
-          name: file.name,
-          docPath: getDocPathRef.current()
-        })
-        if (!result) continue
-        const node = schema.nodes.image?.create({ src: result.src, alt: file.name })
-        if (node) nodes.push(node)
+        try {
+          const docPath = await ensureDocPathRef.current()
+          if (!docPath) continue
+          const result = await window.api.saveImage(
+            dropped?.path
+              ? { sourcePath: dropped.path, docPath }
+              : { data: await file.arrayBuffer(), name: file.name, docPath }
+          )
+          const src = result?.src
+          if (!src) continue
+          const node = schema.nodes.image?.create({ src, alt: file.name })
+          if (node) nodes.push(node)
+        } catch (error) {
+          onImageErrorRef.current(error)
+        }
       }
       return nodes
     }
@@ -133,13 +144,15 @@ function InnerEditor({
         .use(indent)
         .use(listener)
         .use(codeBlockCopyPlugin)
+        .use(localImageViewPlugin)
         .use(prism)
         // Typora-style shortcuts (Ctrl+1..6 headings, Ctrl+K link, Ctrl+Shift+K
         // code fence, Ctrl+T table, Ctrl+Shift+I image, Ctrl+\\ clear format, …).
         .use(
           createTyporaKeymap({
-            getDocPath: () => getDocPathRef.current(),
-            isReadOnly: () => isReadOnlyRef.current()
+            isReadOnly: () => isReadOnlyRef.current(),
+            ensureDocPath: () => ensureDocPathRef.current(),
+            onImageError: (error) => onImageErrorRef.current(error)
           })
         ),
     []
