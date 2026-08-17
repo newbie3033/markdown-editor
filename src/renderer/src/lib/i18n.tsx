@@ -80,7 +80,9 @@ const dict = {
     'status.itemsTitle': 'Status bar items',
     'status.readOnly': 'Read-only mode',
     'status.editMode': 'Edit mode',
-    'status.readOnlySuffix': ' (read-only)'
+    'status.readOnlySuffix': ' (read-only)',
+    'error.saveFailed': 'Could not save the document. Your edits are still open.',
+    'error.fileChanged': 'The file changed on disk. It was not overwritten; use Save As or reopen it.'
   },
   zh: {
     'files.openFolder': '打开文件夹',
@@ -160,7 +162,9 @@ const dict = {
     'status.itemsTitle': '状态栏项目',
     'status.readOnly': '只读模式',
     'status.editMode': '编辑模式',
-    'status.readOnlySuffix': '（只读）'
+    'status.readOnlySuffix': '（只读）',
+    'error.saveFailed': '无法保存文档，当前编辑内容仍保留在窗口中。',
+    'error.fileChanged': '文件已被其他程序修改，因此没有覆盖。请另存为或重新打开文件。'
   }
 } as const
 

@@ -136,10 +136,10 @@ export function StatusBar({
     toastTimerRef.current = setTimeout(() => setToast(null), 1600)
   }
 
-  const handleCopyPath = (): void => {
+  const handleCopyPath = async (): Promise<void> => {
     if (!filePath) return
     try {
-      window.api.copyText(filePath)
+      await window.api.copyText(filePath)
       showToast('success', t('status.copySuccess'))
     } catch {
       showToast('error', t('status.copyFail'))
@@ -195,7 +195,7 @@ export function StatusBar({
         {visible.path && (
           <button
             className={`status-item status-path-btn${filePath ? '' : ' disabled'}`}
-            onClick={handleCopyPath}
+            onClick={() => void handleCopyPath()}
             title={filePath ? t('status.copyPath') : undefined}
           >
             {filePath ?? t('status.untitled')}
@@ -226,7 +226,7 @@ export function StatusBar({
         )}
         {visible.lang && (
           <button className="status-item status-btn" onClick={onToggleLang} title={t('status.language')}>
-            {lang === 'zh' ? 'EN' : '中文'}
+            {lang === 'zh' ? 'EN' : '中'}
           </button>
         )}
         {visible.zoom && (

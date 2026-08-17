@@ -21,6 +21,7 @@ let mainWindow: BrowserWindow | null = null
 // startup file arguments are never silently dropped.
 const pendingOpenPaths: string[] = []
 let rendererReady = false
+let rendererGone = false
 // Set right before a close that the renderer already approved; the window's
 // 'close' handler must not intercept it again.
 let forceClose = false
@@ -33,8 +34,17 @@ function isMarkdownPath(path: string): boolean {
   return MARKDOWN_EXTENSIONS.has(path.slice(dot).toLowerCase())
 }
 
+function isAllowedExternalUrl(value: string): boolean {
+  try {
+    return ['http:', 'https:', 'mailto:'].includes(new URL(value).protocol)
+  } catch {
+    return false
+  }
+}
+
 function createWindow(): void {
   rendererReady = false
+  rendererGone = false
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -46,7 +56,7 @@ function createWindow(): void {
     autoHideMenuBar: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
       // Skip loading the spellchecker dictionary at startup.
@@ -61,14 +71,22 @@ function createWindow(): void {
   // Closing the window is routed through the renderer: it asks about
   // unsaved changes and replies with app:close-confirmed when it is safe.
   mainWindow.on('close', (event) => {
-    if (forceClose) return
+    // Before renderer readiness there is no volatile editor state yet; after a
+    // renderer crash there is no live process that can answer the close IPC
+    // (the recovery draft remains available for the next launch).
+    if (forceClose || !rendererReady || rendererGone) return
     event.preventDefault()
     mainWindow?.webContents.send(IPC.requestClose)
+  })
+
+  mainWindow.webContents.on('render-process-gone', () => {
+    rendererGone = true
   })
 
   mainWindow.on('closed', () => {
     mainWindow = null
     forceClose = false
+    rendererGone = false
   })
 
   // Self-test harness (headless verification), only when INKMARK_SELFTEST=1.
@@ -80,9 +98,16 @@ function createWindow(): void {
     })
   }
 
-  // Open external links in the system browser instead of inside the app.
+  // The editor never needs to navigate its privileged renderer away from the
+  // packaged application page.
+  mainWindow.webContents.on('will-navigate', (event) => {
+    event.preventDefault()
+  })
+
+  // Open only explicitly allow-listed external protocols in the system
+  // browser. Deny every attempted child window.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    if (isAllowedExternalUrl(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
 
@@ -141,9 +166,15 @@ if (!gotSingleInstanceLock) {
 
     // The renderer reports when its IPC listeners are registered; flush any
     // "open with" paths that were queued while the window was starting.
-    ipcMain.on(IPC.rendererReady, () => {
+    ipcMain.on(IPC.rendererReady, (event) => {
+      const current = mainWindow
+      if (
+        !current ||
+        event.sender !== current.webContents ||
+        event.senderFrame !== current.webContents.mainFrame
+      ) return
       rendererReady = true
-      const win = mainWindow
+      const win = current
       if (!win) return
       for (const path of pendingOpenPaths.splice(0)) {
         win.webContents.send(IPC.openPath, path)
@@ -152,9 +183,13 @@ if (!gotSingleInstanceLock) {
 
     // The renderer finished its unsaved-changes handling (saved or discarded);
     // now the close is approved and must not be intercepted again.
-    ipcMain.on(IPC.closeConfirmed, () => {
+    ipcMain.on(IPC.closeConfirmed, (event) => {
       const win = mainWindow
-      if (!win) return
+      if (
+        !win ||
+        event.sender !== win.webContents ||
+        event.senderFrame !== win.webContents.mainFrame
+      ) return
       forceClose = true
       win.close()
     })

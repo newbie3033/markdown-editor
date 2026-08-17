@@ -114,7 +114,7 @@ export function EditorContextMenu({
     }
   }, [onClose])
 
-  const handleClick = (item: Item): void => {
+  const handleClick = async (item: Item): Promise<void> => {
     onClose()
     if (!editor) return
 
@@ -125,7 +125,7 @@ export function EditorContextMenu({
         const { from, to } = state.selection
         const text = state.doc.textBetween(from, to, '\n', ' ')
         if (!text) return
-        window.api.copyText(text)
+        void window.api.copyText(text)
         if (item.action === 'cut') {
           view.dispatch(state.tr.deleteSelection().scrollIntoView())
           view.focus()
@@ -135,7 +135,7 @@ export function EditorContextMenu({
     }
 
     if (item.action === 'paste') {
-      const text = window.api.readClipboardText()
+      const text = await window.api.readClipboardText()
       if (!text) return
       editor.action((ctx) => {
         const view = ctx.get(editorViewCtx)
@@ -189,7 +189,7 @@ export function EditorContextMenu({
               key={item.action}
               className="ctx-item"
               disabled={(item.action === 'copy' || item.action === 'cut') && !hasSelection}
-              onClick={() => handleClick(item)}
+              onClick={() => void handleClick(item)}
             >
               <span className="ctx-label">{t(item.labelKey)}</span>
               {item.shortcut && <span className="ctx-shortcut">{item.shortcut}</span>}

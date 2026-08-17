@@ -39,7 +39,7 @@ class CodeBlockView {
   }
 
   private copy(): void {
-    window.api.copyText(this.node.textContent)
+    void window.api.copyText(this.node.textContent)
     this.button.textContent = tStatic('code.copied')
     this.button.classList.add('copied')
     if (this.feedbackTimer) clearTimeout(this.feedbackTimer)

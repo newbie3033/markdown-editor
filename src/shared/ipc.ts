@@ -7,12 +7,39 @@ export type Lang = 'en' | 'zh'
 export interface FileResult {
   path?: string
   content?: string
+  version?: FileVersion
   canceled: boolean
 }
 
 export interface SaveResult {
   path?: string
+  version?: FileVersion
   canceled: boolean
+}
+
+export interface FileVersion {
+  mtimeMs: number
+  size: number
+  sha256: string
+}
+
+export interface ReadFileResult {
+  content: string
+  version: FileVersion
+}
+
+export interface WriteFileResult {
+  version?: FileVersion
+  conflict: boolean
+}
+
+export interface RecoveryDraft {
+  filePath: string | null
+  content: string
+  cleanContent: string
+  fileVersion: FileVersion | null
+  sourceMode: boolean
+  updatedAt: number
 }
 
 export interface FolderResult {
@@ -144,6 +171,12 @@ export const IPC = {
   pickImage: 'image:pick',
   searchFiles: 'search:files',
   confirmSave: 'app:confirm-save',
+  showError: 'app:show-error',
+  copyText: 'clipboard:write-text',
+  readClipboardText: 'clipboard:read-text',
+  loadRecoveryDraft: 'recovery:load',
+  saveRecoveryDraft: 'recovery:save',
+  clearRecoveryDraft: 'recovery:clear',
   openExternal: 'app:open-external',
   openLocalPath: 'app:open-local-path',
   pathExists: 'app:path-exists',
@@ -173,8 +206,8 @@ export const REPOSITORY_URL = 'https://github.com/newbie3033/markdown-editor'
 export interface InkMarkApi {
   openFileDialog(): Promise<FileResult>
   saveFileDialog(defaultPath: string | null, content: string): Promise<SaveResult>
-  readFile(path: string): Promise<string>
-  writeFile(path: string, content: string): Promise<void>
+  readFile(path: string): Promise<ReadFileResult>
+  writeFile(path: string, content: string, expectedVersion?: FileVersion | null): Promise<WriteFileResult>
   openFolderDialog(): Promise<FolderResult>
   listMarkdown(folderPath: string): Promise<FileEntry[]>
   exportHtml(defaultName: string, html: string): Promise<SaveResult>
@@ -184,6 +217,7 @@ export interface InkMarkApi {
   pickImage(): Promise<PickImageResult>
   searchFiles(folderPath: string, query: string, flags?: SearchFlags): Promise<FileSearchResult[]>
   confirmSave(fileName: string): Promise<SaveChoice>
+  showError(message: string, detail?: string): Promise<void>
   openExternal(url: string): Promise<void>
   openLocalPath(path: string): Promise<string>
   pathExists(path: string): Promise<boolean>
@@ -193,8 +227,11 @@ export interface InkMarkApi {
   setZoom(level: number): Promise<void>
   showAbout(): Promise<void>
   setReadOnly(value: boolean): Promise<void>
-  copyText(text: string): void
-  readClipboardText(): string
+  copyText(text: string): Promise<void>
+  readClipboardText(): Promise<string>
+  loadRecoveryDraft(): Promise<RecoveryDraft | null>
+  saveRecoveryDraft(draft: RecoveryDraft): Promise<void>
+  clearRecoveryDraft(): Promise<void>
   getLocale(): Promise<Lang>
   setLocale(lang: Lang): Promise<void>
   onMenuAction(callback: (action: MenuAction) => void): () => void

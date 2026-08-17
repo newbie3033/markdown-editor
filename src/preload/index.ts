@@ -1,4 +1,4 @@
-import { clipboard, contextBridge, ipcRenderer, webUtils } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import {
   IPC,
   type FileResult,
@@ -13,7 +13,11 @@ import {
   type PickImageResult,
   type FileSearchResult,
   type SaveChoice,
-  type SearchFlags
+  type SearchFlags,
+  type FileVersion,
+  type ReadFileResult,
+  type WriteFileResult,
+  type RecoveryDraft
 } from '../shared/ipc'
 
 const api: InkMarkApi = {
@@ -22,10 +26,13 @@ const api: InkMarkApi = {
   saveFileDialog: (defaultPath: string | null, content: string): Promise<SaveResult> =>
     ipcRenderer.invoke(IPC.saveFileDialog, defaultPath, content),
 
-  readFile: (path: string): Promise<string> => ipcRenderer.invoke(IPC.readFile, path),
+  readFile: (path: string): Promise<ReadFileResult> => ipcRenderer.invoke(IPC.readFile, path),
 
-  writeFile: (path: string, content: string): Promise<void> =>
-    ipcRenderer.invoke(IPC.writeFile, path, content),
+  writeFile: (
+    path: string,
+    content: string,
+    expectedVersion?: FileVersion | null
+  ): Promise<WriteFileResult> => ipcRenderer.invoke(IPC.writeFile, path, content, expectedVersion),
 
   openFolderDialog: (): Promise<FolderResult> => ipcRenderer.invoke(IPC.openFolderDialog),
 
@@ -49,6 +56,9 @@ const api: InkMarkApi = {
     ipcRenderer.invoke(IPC.searchFiles, folderPath, query, flags),
 
   confirmSave: (fileName: string): Promise<SaveChoice> => ipcRenderer.invoke(IPC.confirmSave, fileName),
+
+  showError: (message: string, detail?: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.showError, message, detail),
 
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke(IPC.openExternal, url),
 
@@ -74,17 +84,16 @@ const api: InkMarkApi = {
 
   setReadOnly: (value: boolean): Promise<void> => ipcRenderer.invoke(IPC.setReadOnly, value),
 
-  copyText: (text: string): void => {
-    clipboard.writeText(text)
-  },
+  copyText: (text: string): Promise<void> => ipcRenderer.invoke(IPC.copyText, text),
 
-  readClipboardText: (): string => {
-    try {
-      return clipboard.readText()
-    } catch {
-      return ''
-    }
-  },
+  readClipboardText: (): Promise<string> => ipcRenderer.invoke(IPC.readClipboardText),
+
+  loadRecoveryDraft: (): Promise<RecoveryDraft | null> => ipcRenderer.invoke(IPC.loadRecoveryDraft),
+
+  saveRecoveryDraft: (draft: RecoveryDraft): Promise<void> =>
+    ipcRenderer.invoke(IPC.saveRecoveryDraft, draft),
+
+  clearRecoveryDraft: (): Promise<void> => ipcRenderer.invoke(IPC.clearRecoveryDraft),
 
   getLocale: (): Promise<Lang> => ipcRenderer.invoke(IPC.getLocale),
 

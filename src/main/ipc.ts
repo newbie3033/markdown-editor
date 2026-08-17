@@ -1,5 +1,14 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  shell,
+  type IpcMainInvokeEvent
+} from 'electron'
 import { existsSync, promises as fs, statSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, extname, join } from 'node:path'
 import {
   IPC,
@@ -8,11 +17,15 @@ import {
   type FileEntry,
   type FileResult,
   type FileSearchResult,
+  type FileVersion,
+  type ReadFileResult,
+  type RecoveryDraft,
   type SaveImagePayload,
   type SaveImageResult,
   type SaveResult,
   type SearchMatch,
-  type SearchFlags
+  type SearchFlags,
+  type WriteFileResult
 } from '../shared/ipc'
 import { getLocale, setLocale, t } from './i18n'
 import { setReadOnlyMode } from './menu'
@@ -22,11 +35,114 @@ const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.sv
 
 const MAX_SEARCH_FILES = 300
 const MAX_MATCHES_PER_FILE = 60
+const RECOVERY_FILE = 'recovery-draft.json'
 
 const isMarkdown = (name: string): boolean => MARKDOWN_EXTENSIONS.has(extname(name).toLowerCase())
 
+function isAllowedExternalUrl(value: string): boolean {
+  try {
+    return ['http:', 'https:', 'mailto:'].includes(new URL(value).protocol)
+  } catch {
+    return false
+  }
+}
+
 async function readUtf8(path: string): Promise<string> {
   return fs.readFile(path, 'utf8')
+}
+
+function sha256(data: string | Uint8Array): string {
+  return createHash('sha256').update(data).digest('hex')
+}
+
+function toFileVersion(stat: { mtimeMs: number; size: number }, hash: string): FileVersion {
+  return { mtimeMs: stat.mtimeMs, size: stat.size, sha256: hash }
+}
+
+async function readDocument(path: string): Promise<ReadFileResult> {
+  const handle = await fs.open(path, 'r')
+  try {
+    const data = await handle.readFile()
+    const version = toFileVersion(await handle.stat(), sha256(data))
+    return { content: data.toString('utf8'), version }
+  } finally {
+    await handle.close()
+  }
+}
+
+/**
+ * Durably replace a file without truncating the previous version first.
+ * The temporary file lives beside the target so the final rename stays on
+ * the same filesystem and is atomic on supported local filesystems.
+ */
+async function atomicWriteFile(
+  path: string,
+  data: string | Uint8Array,
+  createMode?: number
+): Promise<FileVersion> {
+  // Preserve the behavior of saving through a symlink: replace its target,
+  // rather than replacing the symlink itself.
+  const targetPath = await fs.realpath(path).catch(() => path)
+  const existing = await fs.stat(targetPath).catch(() => null)
+  const tempPath = join(
+    dirname(targetPath),
+    `.${basename(targetPath)}.inkmark-${process.pid}-${randomUUID()}.tmp`
+  )
+  let renamed = false
+
+  try {
+    const handle = await fs.open(tempPath, 'wx', existing?.mode ?? createMode)
+    try {
+      if (typeof data === 'string') await handle.writeFile(data, 'utf8')
+      else await handle.writeFile(data)
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+
+    await fs.rename(tempPath, targetPath)
+    renamed = true
+
+    // Persist the directory entry where the platform supports syncing a
+    // directory handle. Windows commonly rejects this, so it is best-effort.
+    try {
+      const dirHandle = await fs.open(dirname(targetPath), 'r')
+      try {
+        await dirHandle.sync()
+      } finally {
+        await dirHandle.close()
+      }
+    } catch {
+      // The file contents were already flushed and renamed successfully.
+    }
+    return toFileVersion(await fs.stat(targetPath), sha256(data))
+  } finally {
+    if (!renamed) await fs.unlink(tempPath).catch(() => undefined)
+  }
+}
+
+function recoveryPath(): string {
+  return join(app.getPath('userData'), RECOVERY_FILE)
+}
+
+function isRecoveryDraft(value: unknown): value is RecoveryDraft {
+  if (!value || typeof value !== 'object') return false
+  const draft = value as Partial<RecoveryDraft>
+  const version = draft.fileVersion
+  const validVersion =
+    version === null ||
+    (!!version &&
+      typeof version.mtimeMs === 'number' &&
+      typeof version.size === 'number' &&
+      typeof version.sha256 === 'string')
+  return (
+    (typeof draft.filePath === 'string' || draft.filePath === null) &&
+    typeof draft.content === 'string' &&
+    typeof draft.cleanContent === 'string' &&
+    validVersion &&
+    typeof draft.sourceMode === 'boolean' &&
+    typeof draft.updatedAt === 'number'
+  )
 }
 
 /** Walk a directory and collect markdown file paths (flat list, budget-capped). */
@@ -154,18 +270,19 @@ function sanitizeFileName(name: string): string {
   return base || 'image.png'
 }
 
-async function uniqueFileName(dir: string, name: string): Promise<string> {
+async function writeUniqueFile(dir: string, name: string, data: Uint8Array): Promise<string> {
   const ext = extname(name)
   const stem = basename(name, ext) || 'image'
   let candidate = name
   let counter = 1
   while (true) {
     try {
-      await fs.access(join(dir, candidate))
+      await fs.writeFile(join(dir, candidate), data, { flag: 'wx', flush: true })
+      return candidate
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
       candidate = `${stem}-${counter}${ext}`
       counter += 1
-    } catch {
-      return candidate
     }
   }
 }
@@ -184,21 +301,47 @@ async function saveImage(payload: SaveImagePayload): Promise<SaveImageResult | n
     const docDir = dirname(payload.docPath)
     const targetDir = join(docDir, 'assets')
     await fs.mkdir(targetDir, { recursive: true })
-    const targetName = await uniqueFileName(targetDir, name)
-    await fs.writeFile(join(targetDir, targetName), buffer)
+    const targetName = await writeUniqueFile(targetDir, name, buffer)
     return { src: `assets/${targetName.replace(/\\/g, '/')}` }
   }
 
   // No document yet: store under the app data directory and use an absolute URL.
   const targetDir = join(app.getPath('userData'), 'images')
   await fs.mkdir(targetDir, { recursive: true })
-  const targetName = await uniqueFileName(targetDir, name)
-  await fs.writeFile(join(targetDir, targetName), buffer)
+  const targetName = await writeUniqueFile(targetDir, name, buffer)
   return { src: toFileUrl(join(targetDir, targetName)) }
 }
 
 export function registerIpc(getWindow: () => BrowserWindow | null): void {
-  ipcMain.handle(IPC.openFileDialog, async (): Promise<FileResult> => {
+  let recoveryQueue: Promise<void> = Promise.resolve()
+  const queueRecovery = (task: () => Promise<void>): Promise<void> => {
+    const run = recoveryQueue.then(task, task)
+    recoveryQueue = run.catch(() => undefined)
+    return run
+  }
+
+  const assertTrustedSender = (event: IpcMainInvokeEvent): void => {
+    const win = getWindow()
+    if (
+      !win ||
+      event.sender !== win.webContents ||
+      event.senderFrame !== win.webContents.mainFrame
+    ) {
+      throw new Error('Rejected IPC request from an untrusted renderer')
+    }
+  }
+
+  const handle = <Args extends unknown[], Result>(
+    channel: string,
+    listener: (event: IpcMainInvokeEvent, ...args: Args) => Result
+  ): void => {
+    ipcMain.handle(channel, (event, ...args: unknown[]) => {
+      assertTrustedSender(event)
+      return listener(event, ...(args as Args))
+    })
+  }
+
+  handle(IPC.openFileDialog, async (): Promise<FileResult> => {
     const win = getWindow()
     const options = {
       title: t('dialog.openFile'),
@@ -211,11 +354,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
     if (result.canceled || result.filePaths.length === 0) return { canceled: true }
     const path = result.filePaths[0]
-    const content = await readUtf8(path)
-    return { path, content, canceled: false }
+    const { content, version } = await readDocument(path)
+    return { path, content, version, canceled: false }
   })
 
-  ipcMain.handle(
+  handle(
     IPC.saveFileDialog,
     async (_event, defaultPath: string | null, content: string): Promise<SaveResult> => {
       const win = getWindow()
@@ -231,18 +374,34 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         ? await dialog.showSaveDialog(win, options)
         : await dialog.showSaveDialog(options)
       if (result.canceled || !result.filePath) return { canceled: true }
-      await fs.writeFile(result.filePath, content, 'utf8')
-      return { path: result.filePath, canceled: false }
+      const version = await atomicWriteFile(result.filePath, content)
+      return { path: result.filePath, version, canceled: false }
     }
   )
 
-  ipcMain.handle(IPC.readFile, async (_event, path: string): Promise<string> => readUtf8(path))
+  handle(IPC.readFile, async (_event, path: string): Promise<ReadFileResult> => readDocument(path))
 
-  ipcMain.handle(IPC.writeFile, async (_event, path: string, content: string): Promise<void> => {
-    await fs.writeFile(path, content, 'utf8')
+  handle(IPC.writeFile, async (
+    _event,
+    path: string,
+    content: string,
+    expectedVersion?: FileVersion | null
+  ): Promise<WriteFileResult> => {
+    if (expectedVersion) {
+      const current = await readDocument(path).then((result) => result.version).catch(() => null)
+      if (
+        !current ||
+        current.mtimeMs !== expectedVersion.mtimeMs ||
+        current.size !== expectedVersion.size ||
+        current.sha256 !== expectedVersion.sha256
+      ) {
+        return { conflict: true }
+      }
+    }
+    return { conflict: false, version: await atomicWriteFile(path, content) }
   })
 
-  ipcMain.handle(IPC.openFolderDialog, async () => {
+  handle(IPC.openFolderDialog, async () => {
     const win = getWindow()
     const options = {
       title: t('dialog.openFolder'),
@@ -253,11 +412,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return { path: result.filePaths[0], canceled: false }
   })
 
-  ipcMain.handle(IPC.listMarkdown, async (_event, folderPath: string): Promise<FileEntry[]> =>
+  handle(IPC.listMarkdown, async (_event, folderPath: string): Promise<FileEntry[]> =>
     listMarkdownRecursive(folderPath, 0)
   )
 
-  ipcMain.handle(IPC.exportHtml, async (_event, defaultName: string, html: string): Promise<SaveResult> => {
+  handle(IPC.exportHtml, async (_event, defaultName: string, html: string): Promise<SaveResult> => {
     const win = getWindow()
     const options = {
       title: t('dialog.exportHtml'),
@@ -268,11 +427,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       ? await dialog.showSaveDialog(win, options)
       : await dialog.showSaveDialog(options)
     if (result.canceled || !result.filePath) return { canceled: true }
-    await fs.writeFile(result.filePath, html, 'utf8')
-    return { path: result.filePath, canceled: false }
+    const version = await atomicWriteFile(result.filePath, html)
+    return { path: result.filePath, version, canceled: false }
   })
 
-  ipcMain.handle(IPC.exportPdf, async (_event, defaultName: string, html: string): Promise<SaveResult> => {
+  handle(IPC.exportPdf, async (_event, defaultName: string, html: string): Promise<SaveResult> => {
     const win = getWindow()
     const options = {
       title: t('dialog.exportPdf'),
@@ -295,14 +454,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         pageSize: 'A4',
         margins: { top: 0.5, bottom: 0.5, left: 0.5, right: 0.5 }
       })
-      await fs.writeFile(result.filePath, data)
-      return { path: result.filePath, canceled: false }
+      const version = await atomicWriteFile(result.filePath, data)
+      return { path: result.filePath, version, canceled: false }
     } finally {
       pdfWindow.destroy()
     }
   })
 
-  ipcMain.handle(IPC.exportPrint, async (_event, html: string): Promise<void> => {
+  handle(IPC.exportPrint, async (_event, html: string): Promise<void> => {
     const printWindow = new BrowserWindow({
       show: false,
       webPreferences: { sandbox: true }
@@ -317,11 +476,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     )
   })
 
-  ipcMain.handle(IPC.saveImage, async (_event, payload: SaveImagePayload): Promise<SaveImageResult | null> =>
+  handle(IPC.saveImage, async (_event, payload: SaveImagePayload): Promise<SaveImageResult | null> =>
     saveImage(payload)
   )
 
-  ipcMain.handle(IPC.pickImage, async () => {
+  handle(IPC.pickImage, async () => {
     const win = getWindow()
     const options = {
       title: t('dialog.pickImage'),
@@ -338,13 +497,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return { path: result.filePaths[0], canceled: false }
   })
 
-  ipcMain.handle(
+  handle(
     IPC.searchFiles,
     async (_event, folderPath: string, query: string, flags: SearchFlags = {}): Promise<FileSearchResult[]> =>
       searchFiles(folderPath, query, flags)
   )
 
-  ipcMain.handle(IPC.confirmSave, async (_event, fileName: string) => {
+  handle(IPC.confirmSave, async (_event, fileName: string) => {
     const win = getWindow()
     const options = {
       type: 'warning' as const,
@@ -358,19 +517,71 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return (['save', 'discard', 'cancel'] as const)[result.response]
   })
 
-  ipcMain.handle(IPC.openExternal, async (_event, url: string): Promise<void> => {
-    if (/^(https?:|mailto:)/i.test(url)) {
+  handle(IPC.showError, async (_event, message: string, detail?: string): Promise<void> => {
+    const win = getWindow()
+    const options = {
+      type: 'error' as const,
+      buttons: [t('dialog.ok')],
+      defaultId: 0,
+      message: message || t('dialog.errorTitle'),
+      detail: detail?.slice(0, 2000)
+    }
+    if (win) await dialog.showMessageBox(win, options)
+    else await dialog.showMessageBox(options)
+  })
+
+  handle(IPC.copyText, async (_event, text: string): Promise<void> => {
+    clipboard.writeText(text)
+  })
+
+  handle(IPC.readClipboardText, async (): Promise<string> => {
+    try {
+      return clipboard.readText()
+    } catch {
+      return ''
+    }
+  })
+
+  handle(IPC.loadRecoveryDraft, async (): Promise<RecoveryDraft | null> => {
+    await recoveryQueue
+    try {
+      const parsed = JSON.parse(await fs.readFile(recoveryPath(), 'utf8')) as unknown
+      return isRecoveryDraft(parsed) ? parsed : null
+    } catch {
+      return null
+    }
+  })
+
+  handle(IPC.saveRecoveryDraft, async (_event, draft: RecoveryDraft): Promise<void> => {
+    if (!isRecoveryDraft(draft)) throw new TypeError('Invalid recovery draft')
+    await queueRecovery(async () => {
+      await fs.mkdir(app.getPath('userData'), { recursive: true })
+      await atomicWriteFile(recoveryPath(), JSON.stringify(draft), 0o600)
+      await fs.chmod(recoveryPath(), 0o600).catch(() => undefined)
+    })
+  })
+
+  handle(IPC.clearRecoveryDraft, async (): Promise<void> => {
+    await queueRecovery(async () => {
+      await fs.unlink(recoveryPath()).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error
+      })
+    })
+  })
+
+  handle(IPC.openExternal, async (_event, url: string): Promise<void> => {
+    if (isAllowedExternalUrl(url)) {
       await shell.openExternal(url)
     }
   })
 
-  ipcMain.handle(IPC.openLocalPath, async (_event, path: string): Promise<string> =>
+  handle(IPC.openLocalPath, async (_event, path: string): Promise<string> =>
     shell.openPath(path)
   )
 
-  ipcMain.handle(IPC.pathExists, async (_event, path: string): Promise<boolean> => existsSync(path))
+  handle(IPC.pathExists, async (_event, path: string): Promise<boolean> => existsSync(path))
 
-  ipcMain.handle(IPC.pathIsDirectory, async (_event, path: string): Promise<boolean> => {
+  handle(IPC.pathIsDirectory, async (_event, path: string): Promise<boolean> => {
     try {
       return statSync(path).isDirectory()
     } catch {
@@ -378,16 +589,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     }
   })
 
-  ipcMain.handle(IPC.getZoom, async (): Promise<number> => {
+  handle(IPC.getZoom, async (): Promise<number> => {
     return getWindow()?.webContents.getZoomLevel() ?? 0
   })
 
-  ipcMain.handle(IPC.setZoom, async (_event, level: number): Promise<void> => {
+  handle(IPC.setZoom, async (_event, level: number): Promise<void> => {
     const clamped = Math.min(3, Math.max(-3, level))
     getWindow()?.webContents.setZoomLevel(clamped)
   })
 
-  ipcMain.handle(IPC.showAbout, async (): Promise<void> => {
+  handle(IPC.showAbout, async (): Promise<void> => {
     const win = getWindow()
     const options = {
       type: 'info' as const,
@@ -403,13 +614,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     }
   })
 
-  ipcMain.handle(IPC.setReadOnly, async (_event, value: boolean): Promise<void> => {
+  handle(IPC.setReadOnly, async (_event, value: boolean): Promise<void> => {
     setReadOnlyMode(value)
   })
 
-  ipcMain.handle(IPC.getLocale, () => getLocale())
+  handle(IPC.getLocale, () => getLocale())
 
-  ipcMain.handle(IPC.setLocale, (_event, lang: 'en' | 'zh') => {
+  handle(IPC.setLocale, (_event, lang: 'en' | 'zh') => {
     setLocale(lang)
   })
 }

@@ -574,8 +574,8 @@ body.resizing {
 }
 /* VS Code-style "whole word" glyph: "ab" between word-boundary bars. */
 .mode-btn.ww {
-  border-left: 1px solid currentColor;
-  border-right: 1px solid currentColor;
+  border-left: 1px solid var(--glass-hairline);
+  border-right: 1px solid var(--glass-hairline);
   border-radius: 0;
   padding-left: 3px;
   padding-right: 3px;

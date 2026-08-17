@@ -53,6 +53,11 @@ engine), packaged for Windows, macOS, and Linux with **electron-builder**.
   title shows a “（只读）” suffix.
 - **Open / Save / Save As / New** — standard file operations (`Ctrl+O`, `Ctrl+S`,
   `Ctrl+Shift+S`, `Ctrl+N`).
+- **Safe saves and crash recovery** — document writes use a flushed temporary
+  file plus atomic rename, saves are serialized, and changes made by another
+  program are never overwritten silently. Unsaved work is periodically stored
+  in a private `recovery-draft.json` under Electron's `userData` directory and
+  restored on the next launch; the draft is removed after save or discard.
 - **Export** — HTML, PDF, and Print (with relative images/links rewritten to
   absolute paths).
 - **中文 / English UI** — switch via *View → Language* or the status bar button;

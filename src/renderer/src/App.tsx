@@ -1,8 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { editorViewCtx, type Editor } from '@milkdown/kit/core'
-import { TextSelection } from '@milkdown/prose/state'
+import { AllSelection } from '@milkdown/prose/state'
 import { getMarkdown, getHTML, replaceAll } from '@milkdown/kit/utils'
-import type { MenuAction, SearchFlags } from '../../shared/ipc'
+import type { FileVersion, MenuAction, SearchFlags } from '../../shared/ipc'
 const MarkdownEditor = lazy(() =>
   import('./components/MarkdownEditor').then((module) => ({ default: module.MarkdownEditor }))
 )
@@ -29,6 +29,11 @@ import {
 import { useI18n, welcomeMarkdown } from './lib/i18n'
 
 type FileWithPath = File & { path?: string }
+type SaveOutcome = 'saved' | 'canceled' | 'failed' | 'stale'
+
+// Milkdown serializes line endings as LF. Treat CRLF/LF as equivalent, but
+// preserve trailing blank lines: adding/removing them is still a real edit.
+const normalizeMarkdown = (text: string): string => text.replace(/\r\n/g, '\n')
 
 export default function App(): React.JSX.Element {
   const { t, lang, setLang, ready: localeReady } = useI18n()
@@ -50,6 +55,7 @@ export default function App(): React.JSX.Element {
   const [outline, setOutline] = useState<OutlineItem[]>([])
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
   const [zoomLevel, setZoomLevel] = useState(0)
+  const [recoveryReady, setRecoveryReady] = useState(false)
   const zoomRef = useRef(0)
   const leftSidebar = useResizableWidth('inkmark.sidebarWidth')
   const outlineSidebar = useResizableWidth('inkmark.outlineWidth')
@@ -60,11 +66,12 @@ export default function App(): React.JSX.Element {
   markdownRef.current = markdown
   const filePathRef = useRef(filePath)
   filePathRef.current = filePath
-  const dirtyRef = useRef(dirty)
-  dirtyRef.current = dirty
+  const fileVersionRef = useRef<FileVersion | null>(null)
   const foldersRef = useRef(folders)
   foldersRef.current = folders
   const welcomedRef = useRef(false)
+  const recoveryStartedRef = useRef(false)
+  const restoringDraftRef = useRef(false)
   // The markdown listener fires asynchronously after programmatic document
   // replacements (open/new/close). Content-based comparison keeps those from
   // marking the document dirty: the listener echo equals the content we just
@@ -81,16 +88,48 @@ export default function App(): React.JSX.Element {
   readOnlyRef.current = readOnly
   const sourceModeRef = useRef(sourceMode)
   sourceModeRef.current = sourceMode
+  // Serialize saves so two rapid Ctrl+S actions can never write the same file
+  // concurrently. Each queued save reads the latest editor content when it
+  // actually begins.
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
 
   const stats = useMemo(() => computeStats(markdown), [markdown])
   const title = fileNameFromPath(filePath) || t('status.untitled')
 
-  // Seed the initial document once the locale has been loaded. The welcome
+  // Recover the last unsaved revision before accepting queued "open with"
+  // paths. A subsequently opened file will go through the normal save/discard
+  // confirmation instead of silently replacing the recovered buffer.
+  useEffect(() => {
+    if (!localeReady || recoveryStartedRef.current) return
+    recoveryStartedRef.current = true
+    void window.api
+      .loadRecoveryDraft()
+      .then((draft) => {
+        if (!draft || normalizeMarkdown(draft.content) === normalizeMarkdown(draft.cleanContent)) return
+        welcomedRef.current = true
+        setFilePath(draft.filePath)
+        filePathRef.current = draft.filePath
+        fileVersionRef.current = draft.fileVersion
+        setMarkdown(draft.content)
+        markdownRef.current = draft.content
+        cleanContentRef.current = draft.cleanContent
+        pendingContentRef.current = draft.content
+        restoringDraftRef.current = true
+        setSourceMode(draft.sourceMode)
+        sourceModeRef.current = draft.sourceMode
+        setOpenFiles(draft.filePath ? [draft.filePath] : [])
+        setDirty(true)
+      })
+      .catch((error) => console.error('Failed to load recovery draft', error))
+      .finally(() => setRecoveryReady(true))
+  }, [localeReady])
+
+  // Seed the initial document once locale and crash recovery have completed. The welcome
   // page shows only on the very first launch (persisted in localStorage);
   // later launches start with a blank untitled document. File → Open Welcome
   // Page reopens it at any time.
   useEffect(() => {
-    if (localeReady && !welcomedRef.current) {
+    if (localeReady && recoveryReady && !welcomedRef.current) {
       welcomedRef.current = true
       // If a document was already opened (e.g. "open with" at startup), never
       // clobber it with the welcome document.
@@ -104,7 +143,7 @@ export default function App(): React.JSX.Element {
         editorRef.current?.action(replaceAll(initial))
       }
     }
-  }, [localeReady, lang])
+  }, [localeReady, recoveryReady, lang])
 
   // Persist theme + window title + editor placeholder text.
   useEffect(() => {
@@ -149,6 +188,7 @@ export default function App(): React.JSX.Element {
       if (value && sourceMode) {
         // Sync the textarea content back and leave source mode first.
         editorRef.current?.action(replaceAll(markdownRef.current))
+        sourceModeRef.current = false
         setSourceMode(false)
       }
       setReadOnly(value)
@@ -179,8 +219,56 @@ export default function App(): React.JSX.Element {
     }
   }, [filePath])
 
-  const normalizeMarkdown = (text: string): string =>
-    text.replace(/\r\n/g, '\n').replace(/\n+$/, '')
+  const getActiveContent = useCallback((): string => {
+    if (sourceModeRef.current) return markdownRef.current
+    return editorRef.current?.action(getMarkdown()) ?? markdownRef.current
+  }, [])
+
+  const hasUnsavedChanges = useCallback((): boolean => {
+    return normalizeMarkdown(getActiveContent()) !== normalizeMarkdown(cleanContentRef.current ?? '')
+  }, [getActiveContent])
+
+  const clearRecoveryDraft = useCallback(async (): Promise<void> => {
+    try {
+      await window.api.clearRecoveryDraft()
+    } catch (error) {
+      console.error('Failed to clear recovery draft', error)
+    }
+  }, [])
+
+  const reportSaveError = useCallback(async (message: string, error?: unknown): Promise<void> => {
+    try {
+      await window.api.showError(
+        message,
+        error == null ? undefined : error instanceof Error ? error.message : String(error)
+      )
+    } catch (reportError) {
+      console.error('Failed to show save error', reportError)
+    }
+  }, [])
+
+  // Keep one private, atomically-written recovery snapshot. This is recovery
+  // data, not the user's saved document, and is removed after save/discard.
+  useEffect(() => {
+    if (!recoveryReady) return
+    const timer = window.setTimeout(() => {
+      if (!hasUnsavedChanges()) {
+        void clearRecoveryDraft()
+        return
+      }
+      void window.api
+        .saveRecoveryDraft({
+          filePath: filePathRef.current,
+          content: getActiveContent(),
+          cleanContent: cleanContentRef.current ?? '',
+          fileVersion: fileVersionRef.current,
+          sourceMode: sourceModeRef.current,
+          updatedAt: Date.now()
+        })
+        .catch((error) => console.error('Failed to save recovery draft', error))
+    }, 500)
+    return () => window.clearTimeout(timer)
+  }, [dirty, filePath, markdown, sourceMode, recoveryReady, clearRecoveryDraft, getActiveContent, hasUnsavedChanges])
 
   const handleEditorReady = useCallback((editor: Editor) => {
     editorRef.current = editor
@@ -192,18 +280,22 @@ export default function App(): React.JSX.Element {
       // Re-baseline from the editor's canonical serialization (the Milkdown
       // serializer normalizes e.g. `-` bullets to `*`), so later listener
       // echoes compare equal and the document does not open as "dirty".
-      cleanContentRef.current = normalizeMarkdown(editor.action(getMarkdown()) ?? '')
+      if (restoringDraftRef.current) {
+        restoringDraftRef.current = false
+      } else {
+        cleanContentRef.current = normalizeMarkdown(editor.action(getMarkdown()) ?? '')
+      }
     }
   }, [])
 
   const handleChange = useCallback((md: string) => {
+    markdownRef.current = md
     setMarkdown(md)
-    // Content-based dirty state: serialization differences (trailing newline,
-    // CRLF) must not count as edits, and transient echoes of programmatic
-    // replacements (open/new/close, editor mount) that equal the clean
-    // baseline must not leave a stale dirty flag behind.
+    // Content-based dirty state: CRLF/LF serialization differences must not
+    // count as edits, while trailing blank-line changes still do.
     const clean = normalizeMarkdown(cleanContentRef.current ?? '')
-    setDirty(normalizeMarkdown(md) !== clean)
+    const nextDirty = normalizeMarkdown(md) !== clean
+    setDirty(nextDirty)
   }, [])
 
   const handleOutline = useCallback((items: OutlineItem[]) => {
@@ -221,10 +313,110 @@ export default function App(): React.JSX.Element {
     setOpenFiles((prev) => (prev.includes(path) ? prev : [...prev, path]))
   }, [isInsideAnyFolder])
 
+  const performSave = useCallback(
+    async (saveAs = false): Promise<SaveOutcome> => {
+      const content = getActiveContent()
+      const currentPath = filePathRef.current
+      const canonical = normalizeMarkdown(content)
+
+      try {
+        if (!currentPath || saveAs) {
+          const result = await window.api.saveFileDialog(currentPath, content)
+          if (result.canceled || !result.path) return 'canceled'
+
+          const savedPath = result.path
+          const isNewPath = savedPath !== currentPath
+          setFilePath(savedPath)
+          filePathRef.current = savedPath
+          fileVersionRef.current = result.version ?? null
+          cleanContentRef.current = canonical
+
+          if (isNewPath) {
+            addToOpenFiles(savedPath)
+            const inside = foldersRef.current.find(
+              (folder) =>
+                savedPath.startsWith(folder.path + '/') ||
+                savedPath.startsWith(folder.path + '\\')
+            )
+            if (inside) {
+              void window.api
+                .listMarkdown(inside.path)
+                .then((tree) => {
+                  setFolders((prev) =>
+                    prev.map((folder) =>
+                      folder.path === inside.path ? { ...folder, tree } : folder
+                    )
+                  )
+                })
+                .catch((error) => console.error('Failed to refresh folder', error))
+            }
+          }
+        } else {
+          const result = await window.api.writeFile(currentPath, content, fileVersionRef.current)
+          if (result.conflict) {
+            await reportSaveError(t('error.fileChanged'))
+            return 'failed'
+          }
+          fileVersionRef.current = result.version ?? null
+          cleanContentRef.current = canonical
+        }
+
+        // An edit may have arrived while the asynchronous disk write was in
+        // progress. Only report clean when the current buffer still equals the
+        // exact content that was persisted.
+        const stillCurrent = normalizeMarkdown(getActiveContent()) === canonical
+        setDirty(!stillCurrent)
+        return stillCurrent ? 'saved' : 'stale'
+      } catch (error) {
+        console.error('Failed to save file', error)
+        await reportSaveError(t('error.saveFailed'), error)
+        return 'failed'
+      }
+    },
+    [addToOpenFiles, getActiveContent, reportSaveError, t]
+  )
+
+  const save = useCallback(
+    (saveAs = false): Promise<SaveOutcome> => {
+      const run = saveQueueRef.current.then(() => performSave(saveAs))
+      saveQueueRef.current = run.then(
+        () => undefined,
+        () => undefined
+      )
+      return run
+    },
+    [performSave]
+  )
+
+  const confirmBeforeReplace = useCallback(async (): Promise<boolean> => {
+    if (!hasUnsavedChanges()) {
+      await clearRecoveryDraft()
+      return true
+    }
+    while (hasUnsavedChanges()) {
+      const name = fileNameFromPath(filePathRef.current) || t('status.untitled')
+      const choice = await window.api.confirmSave(name)
+      if (choice === 'cancel') return false
+      if (choice === 'discard') {
+        await clearRecoveryDraft()
+        return true
+      }
+      const outcome = await save(false)
+      if (outcome === 'canceled' || outcome === 'failed') return false
+      // If another edit arrived while saving, loop and ask about that newer
+      // unsaved revision instead of discarding it during the transition.
+    }
+    await clearRecoveryDraft()
+    return true
+  }, [clearRecoveryDraft, hasUnsavedChanges, save, t])
+
   const loadDocument = useCallback(
-    async (path: string, content: string) => {
+    async (path: string, content: string, version: FileVersion) => {
       setFilePath(path)
+      filePathRef.current = path
+      fileVersionRef.current = version
       setMarkdown(content)
+      markdownRef.current = content
       setDirty(false)
       addToOpenFiles(path)
       cleanContentRef.current = content
@@ -236,7 +428,9 @@ export default function App(): React.JSX.Element {
         // Baseline against the editor's canonical serialization so the
         // debounced listener echo (which may normalize list markers etc.)
         // never marks a freshly opened file as dirty.
-        cleanContentRef.current = normalizeMarkdown(editor.action(getMarkdown()) ?? content)
+        cleanContentRef.current = sourceModeRef.current
+          ? normalizeMarkdown(content)
+          : normalizeMarkdown(editor.action(getMarkdown()) ?? content)
       }
       focusEditor()
     },
@@ -246,20 +440,25 @@ export default function App(): React.JSX.Element {
   const openFile = useCallback(async () => {
     const result = await window.api.openFileDialog()
     if (!result.canceled && result.path && result.content != null) {
-      await loadDocument(result.path, result.content)
+      if (!(await confirmBeforeReplace())) return
+      // The selected file may be the current document and may just have been
+      // saved by the confirmation flow, so read it again after confirmation.
+      const latest = await window.api.readFile(result.path)
+      await loadDocument(result.path, latest.content, latest.version)
     }
-  }, [loadDocument])
+  }, [confirmBeforeReplace, loadDocument])
 
   const openPath = useCallback(
     async (path: string) => {
       try {
-        const content = await window.api.readFile(path)
-        await loadDocument(path, content)
+        if (!(await confirmBeforeReplace())) return
+        const result = await window.api.readFile(path)
+        await loadDocument(path, result.content, result.version)
       } catch (error) {
         console.error('Failed to open file', error)
       }
     },
-    [loadDocument]
+    [confirmBeforeReplace, loadDocument]
   )
 
   const openFolder = useCallback(async (explicitPath?: string) => {
@@ -297,8 +496,9 @@ export default function App(): React.JSX.Element {
   const openSearchResult = useCallback(
     async (path: string, matchIndex: number, query: string, flags: SearchFlags = {}) => {
       try {
-        const content = await window.api.readFile(path)
-        await loadDocument(path, content)
+        if (!(await confirmBeforeReplace())) return
+        const result = await window.api.readFile(path)
+        await loadDocument(path, result.content, result.version)
         if (matchIndex >= 0) {
           const editor = editorRef.current
           if (editor) {
@@ -311,43 +511,7 @@ export default function App(): React.JSX.Element {
         console.error('Failed to open search result', error)
       }
     },
-    [loadDocument]
-  )
-
-  const save = useCallback(
-    async (saveAs = false) => {
-      const content = editorRef.current?.action(getMarkdown()) ?? markdownRef.current
-      const currentPath = filePathRef.current
-      // Baseline against the canonical serialization of what will be saved, so
-      // the document does not flip back to "dirty" right after saving.
-      const canonical = normalizeMarkdown(content)
-      if (!currentPath || saveAs) {
-        const result = await window.api.saveFileDialog(currentPath, content)
-        if (!result.canceled && result.path) {
-          const savedPath = result.path
-          const isNewPath = savedPath !== currentPath
-          setFilePath(savedPath)
-          setDirty(false)
-          cleanContentRef.current = canonical
-          if (isNewPath) {
-            // Show the freshly saved document in the sidebar: as a loose file,
-            // or in the open folder's tree (refreshed to pick it up).
-            addToOpenFiles(savedPath)
-            const inside = foldersRef.current.find(
-              (folder) =>
-                savedPath.startsWith(folder.path + '/') ||
-                savedPath.startsWith(folder.path + '\\')
-            )
-            if (inside) void openFolder(inside.path)
-          }
-        }
-      } else {
-        await window.api.writeFile(currentPath, content)
-        setDirty(false)
-        cleanContentRef.current = canonical
-      }
-    },
-    [addToOpenFiles, openFolder]
+    [confirmBeforeReplace, loadDocument]
   )
 
   // The main process routes window closing through here: ask about unsaved
@@ -356,37 +520,24 @@ export default function App(): React.JSX.Element {
     if (closeRequestRef.current) return
     closeRequestRef.current = true
     try {
-      if (!dirtyRef.current) {
-        window.api.closeConfirmed()
-        return
-      }
-      const name = fileNameFromPath(filePathRef.current) || t('status.untitled')
-      const choice = await window.api.confirmSave(name)
-      if (choice === 'cancel') return
-      if (choice === 'save') {
-        await save(false)
-        // Save As may have been canceled — only close once actually saved.
-        if (!filePathRef.current) return
-      }
-      window.api.closeConfirmed()
+      if (await confirmBeforeReplace()) window.api.closeConfirmed()
     } finally {
       closeRequestRef.current = false
     }
-  }, [save, t])
+  }, [confirmBeforeReplace])
 
   const closeFile = useCallback(
     async (path: string) => {
       const isCurrent = filePathRef.current === path
-      if (isCurrent && dirtyRef.current) {
-        const choice = await window.api.confirmSave(fileNameFromPath(path) || t('status.untitled'))
-        if (choice === 'cancel') return
-        if (choice === 'save') await save(false)
-      }
+      if (isCurrent && !(await confirmBeforeReplace())) return
       setOpenFiles((prev) => prev.filter((p) => p !== path))
       if (isCurrent) {
         // Close the document: reset to a new untitled document.
         setFilePath(null)
+        filePathRef.current = null
+        fileVersionRef.current = null
         setMarkdown('')
+        markdownRef.current = ''
         setDirty(false)
         cleanContentRef.current = ''
         pendingContentRef.current = ''
@@ -398,12 +549,16 @@ export default function App(): React.JSX.Element {
         }
       }
     },
-    [save, t]
+    [confirmBeforeReplace]
   )
 
-  const newDocument = useCallback(() => {
+  const newDocument = useCallback(async () => {
+    if (!(await confirmBeforeReplace())) return
     setFilePath(null)
+    filePathRef.current = null
+    fileVersionRef.current = null
     setMarkdown('')
+    markdownRef.current = ''
     setDirty(false)
     cleanContentRef.current = ''
     pendingContentRef.current = ''
@@ -414,13 +569,17 @@ export default function App(): React.JSX.Element {
       pendingContentRef.current = null
     }
     focusEditor()
-  }, [focusEditor])
+  }, [confirmBeforeReplace, focusEditor])
 
   // File → Open Welcome Page: show the welcome document as an untitled page.
-  const showWelcome = useCallback(() => {
+  const showWelcome = useCallback(async () => {
+    if (!(await confirmBeforeReplace())) return
     const welcome = welcomeMarkdown(lang)
     setFilePath(null)
+    filePathRef.current = null
+    fileVersionRef.current = null
     setMarkdown(welcome)
+    markdownRef.current = welcome
     setDirty(false)
     cleanContentRef.current = welcome
     pendingContentRef.current = welcome
@@ -431,7 +590,7 @@ export default function App(): React.JSX.Element {
       cleanContentRef.current = normalizeMarkdown(editor.action(getMarkdown()) ?? welcome)
     }
     focusEditor()
-  }, [lang, focusEditor])
+  }, [confirmBeforeReplace, lang, focusEditor])
 
   const buildDocumentHtml = useCallback(() => {
     const body = editorRef.current?.action(getHTML()) ?? ''
@@ -472,7 +631,7 @@ export default function App(): React.JSX.Element {
       editorRef.current?.action((ctx) => {
         const view = ctx.get(editorViewCtx)
         const { state } = view
-        const selection = TextSelection.create(state.doc, 0, state.doc.content.size)
+        const selection = new AllSelection(state.doc)
         view.dispatch(state.tr.setSelection(selection))
         view.focus()
       })
@@ -498,10 +657,17 @@ export default function App(): React.JSX.Element {
   const toggleSourceMode = useCallback(() => {
     setSourceMode((prev) => {
       const next = !prev
-      // When leaving source mode, sync the textarea content into the editor.
-      if (!next) {
+      if (next) {
+        // Entering source mode must snapshot the editor synchronously. The
+        // listener mirrors changes with a debounce and may still be stale.
+        const current = editorRef.current?.action(getMarkdown()) ?? markdownRef.current
+        markdownRef.current = current
+        setMarkdown(current)
+      } else {
+        // When leaving source mode, sync the textarea content into the editor.
         editorRef.current?.action(replaceAll(markdownRef.current))
       }
+      sourceModeRef.current = next
       return next
     })
   }, [])
@@ -510,10 +676,10 @@ export default function App(): React.JSX.Element {
     (action: MenuAction) => {
       switch (action) {
         case 'new':
-          if (!readOnlyRef.current) newDocument()
+          if (!readOnlyRef.current) void newDocument()
           break
         case 'welcome':
-          if (!readOnlyRef.current) showWelcome()
+          if (!readOnlyRef.current) void showWelcome()
           break
         case 'open':
           void openFile()
@@ -636,6 +802,7 @@ export default function App(): React.JSX.Element {
   // requests. Readiness is announced only after the listeners exist so the
   // main process never drops a queued file path.
   useEffect(() => {
+    if (!recoveryReady) return
     const offMenu = window.api.onMenuAction(handleMenuAction)
     const offOpen = window.api.onOpenPath((path) => void openPath(path))
     const offClose = window.api.onCloseRequest(() => {
@@ -647,7 +814,7 @@ export default function App(): React.JSX.Element {
       offOpen()
       offClose()
     }
-  }, [handleMenuAction, openPath, handleCloseRequest])
+  }, [recoveryReady, handleMenuAction, openPath, handleCloseRequest])
 
   // Window-level drag & drop: open .md documents and append images dropped
   // outside of the editor.
@@ -792,8 +959,10 @@ export default function App(): React.JSX.Element {
             replaceOpen={replaceOpen}
             onToggleReplace={() => setReplaceOpen((v) => !v)}
             onSourceReplace={(text) => {
+              markdownRef.current = text
               setMarkdown(text)
-              setDirty(true)
+              const nextDirty = normalizeMarkdown(text) !== normalizeMarkdown(cleanContentRef.current ?? '')
+              setDirty(nextDirty)
             }}
             onClose={() => setFindOpen(false)}
           />
@@ -804,7 +973,7 @@ export default function App(): React.JSX.Element {
           onContextMenu={onEditorContextMenu}
           onScroll={() => setCtxMenu(null)}
         >
-          {localeReady && (
+          {localeReady && recoveryReady && (
             <div className={`wysiwyg-wrap${sourceMode ? ' hidden' : ''}`}>
               <Suspense fallback={<div className="editor-loading" />}>
                 <MarkdownEditor
@@ -826,8 +995,11 @@ export default function App(): React.JSX.Element {
               className="source-editor"
               value={markdown}
               onChange={(event) => {
-                setMarkdown(event.target.value)
-                setDirty(true)
+                const value = event.target.value
+                markdownRef.current = value
+                setMarkdown(value)
+                const nextDirty = normalizeMarkdown(value) !== normalizeMarkdown(cleanContentRef.current ?? '')
+                setDirty(nextDirty)
               }}
               spellCheck={false}
               autoFocus

@@ -1,8 +1,8 @@
 // Self-test harness for headless verification.
 // Only runs when INKMARK_SELFTEST=1 is set; results are logged to stderr.
 
-import { app, clipboard, dialog, Menu, shell, type BrowserWindow } from 'electron'
-import { existsSync, promises as fs } from 'node:fs'
+import { app, BrowserWindow, clipboard, dialog, Menu, shell } from 'electron'
+import { appendFileSync, existsSync, promises as fs, writeFileSync, writeSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { IPC, REPOSITORY_URL } from '../shared/ipc'
 
@@ -10,7 +10,13 @@ const TEST_DIR = '/tmp/inkmark-selftest'
 const results: string[] = []
 
 function check(name: string, ok: boolean, extra = ''): void {
-  results.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra ? ' :: ' + String(extra).slice(0, 300) : ''}`)
+  const line = `${ok ? 'PASS' : 'FAIL'} ${name}${extra ? ' :: ' + String(extra).slice(0, 300) : ''}`
+  results.push(line)
+  try {
+    appendFileSync(join(TEST_DIR, 'progress.log'), `[SELFTEST] ${line}\n`, 'utf8')
+  } catch {
+    // The test directory is created at the beginning of the run.
+  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -18,10 +24,18 @@ function sleep(ms: number): Promise<void> {
 }
 
 export async function runSelfTest(win: BrowserWindow): Promise<void> {
+  let keepAliveWindow: BrowserWindow | null = null
   const js = (code: string): Promise<unknown> => win.webContents.executeJavaScript(code, true)
-  win.webContents.on('console-message', (_event: unknown, levelOrMessage: unknown, message: unknown) => {
-    const text =
-      typeof levelOrMessage === 'string' ? levelOrMessage : typeof message === 'string' ? message : ''
+  const realShowMessageBox = dialog.showMessageBox.bind(dialog)
+  // Most feature tests intentionally move between documents. Default those
+  // incidental unsaved-change prompts to "Don't Save"; dedicated tests below
+  // override this stub to exercise Save / Cancel explicitly.
+  dialog.showMessageBox = (async () => ({
+    response: 1,
+    checkboxChecked: false
+  })) as unknown as typeof dialog.showMessageBox
+  win.webContents.on('console-message', (details) => {
+    const text = details.message
     if (text) console.log('[renderer]', String(text).slice(0, 400))
   })
   try {
@@ -43,6 +57,7 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     )
     await fs.writeFile(join(TEST_DIR, 'source.png'), png)
     await fs.writeFile(join(TEST_DIR, 'docs', 'drop-test.md'), '# Dropped Document\n\nHello from drop test.')
+    await fs.writeFile(join(TEST_DIR, 'docs', 'conflict.md'), '# Original\n')
 
     // Wait for the editor to mount (also a rough startup-time metric).
     const startedAt = Date.now()
@@ -143,6 +158,44 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     const localeZh = (await js(`window.api.getLocale()`)) as string
     check('setLocale zh', localeZh === 'zh', localeZh)
     await js(`window.api.setLocale(${JSON.stringify(locale)})`)
+    // The checks below intentionally locate visible menu labels. Keep both the
+    // renderer and main-process menus in one deterministic locale even when a
+    // fresh Electron profile defaults to English.
+    win.webContents.send(IPC.menuAction, 'lang-zh')
+    await sleep(500)
+
+    // 1b. Versioned writes must reject an external modification instead of
+    // overwriting it, and recovery snapshots must round-trip and clear.
+    const conflictPath = join(TEST_DIR, 'docs', 'conflict.md')
+    const beforeExternal = (await js(
+      `window.api.readFile(${JSON.stringify(conflictPath)})`
+    )) as { version?: { mtimeMs: number; size: number; sha256: string } }
+    await sleep(20)
+    await fs.writeFile(conflictPath, '# External Change\n')
+    const conflictResult = (await js(
+      `window.api.writeFile(${JSON.stringify(conflictPath)}, '# InkMark Change\\n', ${JSON.stringify(beforeExternal.version)})`
+    )) as { conflict?: boolean }
+    const afterConflict = await fs.readFile(conflictPath, 'utf8')
+    check(
+      'external modification is not overwritten',
+      conflictResult?.conflict === true && afterConflict === '# External Change\n',
+      JSON.stringify(conflictResult)
+    )
+
+    const draft = {
+      filePath: null,
+      content: '# Recovered',
+      cleanContent: '',
+      fileVersion: null,
+      sourceMode: true,
+      updatedAt: Date.now()
+    }
+    await js(`window.api.saveRecoveryDraft(${JSON.stringify(draft)})`)
+    const loadedDraft = (await js(`window.api.loadRecoveryDraft()`)) as typeof draft | null
+    check('recovery draft round-trip', loadedDraft?.content === draft.content && loadedDraft?.sourceMode === true)
+    await js(`window.api.clearRecoveryDraft()`)
+    const clearedDraft = await js(`window.api.loadRecoveryDraft()`)
+    check('recovery draft clears', clearedDraft === null)
 
     // 2. saveImage from a source path (document open → assets/<name>).
     const saved = (await js(
@@ -1198,6 +1251,47 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     )) as boolean
     check('saved document appears in open folder tree', savedInTree === true)
 
+    // 15c. Source mode must save the textarea buffer itself (not the hidden
+    // Milkdown document), and New must respect Cancel/Discard.
+    win.webContents.send(IPC.menuAction, 'toggle-source')
+    await sleep(300)
+    const sourceValue = '# Source Mode Save\n\nexact textarea revision\n'
+    await js(`(() => {
+      const textarea = document.querySelector('.source-editor')
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set
+      setter.call(textarea, ${JSON.stringify(sourceValue)})
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+      return true
+    })()`)
+    win.webContents.send(IPC.menuAction, 'save')
+    await sleep(900)
+    const sourceSaved = await fs.readFile(join(TEST_DIR, 'docs', 'saved-in-folder.md'), 'utf8').catch(() => '')
+    check('source mode saves textarea content', sourceSaved === sourceValue, JSON.stringify(sourceSaved))
+
+    await js(`(() => {
+      const textarea = document.querySelector('.source-editor')
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set
+      setter.call(textarea, textarea.value + 'unsaved-after-save')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+      return true
+    })()`)
+    const originalGuardDialog = dialog.showMessageBox.bind(dialog)
+    dialog.showMessageBox = (async () => ({ response: 2, checkboxChecked: false })) as unknown as typeof dialog.showMessageBox
+    win.webContents.send(IPC.menuAction, 'new')
+    await sleep(500)
+    const keptAfterCancel = (await js(
+      `document.querySelector('.source-editor')?.value.endsWith('unsaved-after-save') === true`
+    )) as boolean
+    check('new document → cancel keeps source edits', keptAfterCancel === true)
+    dialog.showMessageBox = (async () => ({ response: 1, checkboxChecked: false })) as unknown as typeof dialog.showMessageBox
+    win.webContents.send(IPC.menuAction, 'new')
+    await sleep(500)
+    const clearedAfterDiscard = (await js(`document.querySelector('.source-editor')?.value === ''`)) as boolean
+    check('new document → discard clears source edits', clearedAfterDiscard === true)
+    dialog.showMessageBox = originalGuardDialog
+    win.webContents.send(IPC.menuAction, 'toggle-source')
+    await sleep(300)
+
     // 16. Hyperlinks: web link → external browser; local link → open in app;
     // ctrl+click also navigates.
     await fs.writeFile(join(TEST_DIR, 'docs', 'link-target.md'), '# Target File\n\nYou reached the target.\n')
@@ -1319,9 +1413,10 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       response: 1,
       checkboxChecked: false
     })) as unknown as typeof dialog.showMessageBox
-    // Keep the app alive after the window is gone so the results can be
-    // printed; window-all-closed would otherwise quit before app.exit().
-    app.removeAllListeners('window-all-closed')
+    // Keep a second native window alive after the tested window is gone.
+    // Otherwise Electron can terminate before the awaited close and finally
+    // block run, hiding failures behind a successful process exit.
+    keepAliveWindow = new BrowserWindow({ show: false })
     win.close()
     await sleep(900)
     check('window close → discard closes window', win.isDestroyed())
@@ -1330,7 +1425,11 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
   } catch (error) {
     check('selftest crashed', false, error instanceof Error ? error.message : String(error))
   } finally {
-    for (const line of results) console.log('[SELFTEST]', line)
+    dialog.showMessageBox = realShowMessageBox
+    const output = results.map((line) => `[SELFTEST] ${line}`).join('\n') + '\n'
+    writeFileSync(join(TEST_DIR, 'results.log'), output, 'utf8')
+    writeSync(process.stderr.fd, output)
+    keepAliveWindow?.hide()
     app.exit(results.some((r) => r.startsWith('FAIL')) ? 1 : 0)
   }
 }
