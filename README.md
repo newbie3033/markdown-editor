@@ -176,6 +176,19 @@ npm run build:unpack
 
 Artifacts are written to `dist/`. The app icon lives at `build/icon.png`.
 
+### GitHub Releases
+
+Pushing a semantic-version tag such as `v1.0.2` starts `.github/workflows/release.yml`.
+It builds Linux (AppImage/deb), Windows (NSIS/portable), and macOS (Intel/Apple
+Silicon) packages, then attaches them to the GitHub Release for that tag. The
+tag version is used as the packaged application version, so it does not need to
+be edited manually in `package.json` before releasing.
+
+```bash
+git tag v1.0.2
+git push origin v1.0.2
+```
+
 The Help menu links to the open-source repository
 (https://github.com/newbie3033/markdown-editor), and *Help → About* shows the
 version with a one-click button to open the repository.
