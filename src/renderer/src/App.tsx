@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { editorViewCtx, type Editor } from '@milkdown/kit/core'
 import { AllSelection } from '@milkdown/prose/state'
-import { getMarkdown, getHTML, replaceAll } from '@milkdown/kit/utils'
+import { getMarkdown, getHTML, replaceAll as replaceAllRaw } from '@milkdown/kit/utils'
 import type { FileVersion, MenuAction, SearchFlags } from '../../shared/ipc'
 const MarkdownEditor = lazy(() =>
   import('./components/MarkdownEditor').then((module) => ({ default: module.MarkdownEditor }))
@@ -27,12 +27,15 @@ import {
   type OutlineItem
 } from './lib/markdown'
 import { useI18n, welcomeMarkdown } from './lib/i18n'
+import { TOGGLE_PREVIEW_SOURCE_EVENT } from './lib/codeBlockCopy'
+import { normalizeDisplayMath } from './lib/math'
 
 type SaveOutcome = 'saved' | 'canceled' | 'failed' | 'stale'
 
 // Milkdown serializes line endings as LF. Treat CRLF/LF as equivalent, but
 // preserve trailing blank lines: adding/removing them is still a real edit.
-const normalizeMarkdown = (text: string): string => text.replace(/\r\n/g, '\n')
+const normalizeMarkdown = (text: string): string => normalizeDisplayMath(text)
+const replaceAll = (markdown: string) => replaceAllRaw(normalizeDisplayMath(markdown))
 
 const sameFileVersion = (left: FileVersion | null, right: FileVersion | null): boolean =>
   left?.mtimeMs === right?.mtimeMs &&
@@ -57,7 +60,11 @@ export default function App(): React.JSX.Element {
   const [readOnly, setReadOnly] = useState(false)
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
   const [outline, setOutline] = useState<OutlineItem[]>([])
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number
+    y: number
+    previewSourceTarget: HTMLElement | null
+  } | null>(null)
   const [zoomLevel, setZoomLevel] = useState(0)
   const [recoveryReady, setRecoveryReady] = useState(false)
   const zoomRef = useRef(0)
@@ -1064,7 +1071,10 @@ export default function App(): React.JSX.Element {
     (event: React.MouseEvent) => {
       if (sourceMode || readOnly) return
       event.preventDefault()
-      setCtxMenu({ x: event.clientX, y: event.clientY })
+      const target = event.target instanceof Element
+        ? event.target.closest<HTMLElement>('.code-block-wrap[data-preview-kind]')
+        : null
+      setCtxMenu({ x: event.clientX, y: event.clientY, previewSourceTarget: target })
     },
     [sourceMode, readOnly]
   )
@@ -1242,6 +1252,11 @@ export default function App(): React.JSX.Element {
             x={ctxMenu.x}
             y={ctxMenu.y}
             editor={editorRef.current}
+            showPreviewSourceToggle={Boolean(ctxMenu.previewSourceTarget)}
+            previewSourceVisible={ctxMenu.previewSourceTarget?.dataset.sourceVisible === 'true'}
+            onTogglePreviewSource={() => {
+              ctxMenu.previewSourceTarget?.dispatchEvent(new Event(TOGGLE_PREVIEW_SOURCE_EVENT))
+            }}
             ensureDocPath={ensureDocumentPath}
             onImageError={(error) => {
               void reportSaveError(t('error.imageFailed'), error)

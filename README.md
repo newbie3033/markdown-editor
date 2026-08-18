@@ -11,7 +11,8 @@ engine), packaged for Windows, macOS, and Linux with **electron-builder**.
 - **WYSIWYG editing** — Markdown syntax renders inline (`**bold**` → **bold**,
   `# Heading` → a real heading, tables, task lists, blockquotes, fenced code
   blocks with syntax highlighting). Code blocks show a **copy button** that
-  copies the code to the clipboard.
+  copies the code to the clipboard. Mermaid and common Mermaid diagram fence
+  languages render live previews, while `$...$` / `$$...$$` math uses KaTeX.
 - **Source code mode** — toggle with `Ctrl+/` to see and edit raw Markdown.
 - **Images: paste & drag-drop** — paste a screenshot or drop an image file to
   insert it. Images are kept in the document's `assets/` folder and Markdown
@@ -94,6 +95,8 @@ engine), packaged for Windows, macOS, and Linux with **electron-builder**.
 | UI         | [React 19](https://react.dev/) + TypeScript                   |
 | Editor     | [Milkdown 7](https://milkdown.dev/) + ProseMirror             |
 | Highlight  | `@milkdown/plugin-prism` (refractor)                          |
+| Diagrams   | [Mermaid](https://mermaid.js.org/)                            |
+| Math       | [KaTeX](https://katex.org/)                                  |
 | Build      | [electron-vite](https://electron-vite.org/)                   |
 | Packaging  | [electron-builder](https://www.electron.build/)               |
 

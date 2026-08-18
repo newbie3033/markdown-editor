@@ -853,7 +853,7 @@ export function registerLocalProtocols(): void {
       headers: {
         'Content-Type': 'text/html; charset=utf-8',
         'Content-Security-Policy':
-          "default-src 'none'; style-src 'unsafe-inline'; img-src data: inkmark-asset:"
+          "default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data: inkmark-asset:"
       }
     })
   })
@@ -864,6 +864,7 @@ async function loadExportDocument(window: BrowserWindow, html: string): Promise<
   pendingExportDocuments.set(id, html)
   try {
     await window.loadURL(`inkmark-export://document/${id}`)
+    await window.webContents.executeJavaScript('document.fonts.ready.then(() => true)')
   } finally {
     pendingExportDocuments.delete(id)
   }
@@ -1422,7 +1423,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
     const pdfWindow = new BrowserWindow({
       show: false,
-      webPreferences: { sandbox: true, offscreen: true, javascript: false }
+      // Page-authored scripts remain blocked by the export document's CSP.
+      // JavaScript stays enabled only so the main process can await
+      // `document.fonts.ready` before Chromium lays out the PDF.
+      webPreferences: { sandbox: true, offscreen: true, javascript: true }
     })
     try {
       await loadExportDocument(pdfWindow, html)

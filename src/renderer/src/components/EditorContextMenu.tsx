@@ -8,6 +8,9 @@ interface EditorContextMenuProps {
   x: number
   y: number
   editor: Editor | null
+  showPreviewSourceToggle: boolean
+  previewSourceVisible: boolean
+  onTogglePreviewSource: () => void
   ensureDocPath: () => Promise<string | null>
   onImageError: (error: unknown) => void
   onClose: () => void
@@ -60,6 +63,9 @@ export function EditorContextMenu({
   x,
   y,
   editor,
+  showPreviewSourceToggle,
+  previewSourceVisible,
+  onTogglePreviewSource,
   ensureDocPath,
   onImageError,
   onClose
@@ -182,6 +188,22 @@ export function EditorContextMenu({
       style={{ left: x, top: y }}
       onContextMenu={(event) => event.preventDefault()}
     >
+      {showPreviewSourceToggle && (
+        <div>
+          <button
+            className="ctx-item"
+            onClick={() => {
+              onClose()
+              onTogglePreviewSource()
+            }}
+          >
+            <span className="ctx-label">
+              {t(previewSourceVisible ? 'ctx.hidePreviewSource' : 'ctx.showPreviewSource')}
+            </span>
+          </button>
+          <div className="ctx-separator" />
+        </div>
+      )}
       {GROUPS.map((group, groupIndex) => (
         <div key={groupIndex}>
           {groupIndex > 0 && <div className="ctx-separator" />}

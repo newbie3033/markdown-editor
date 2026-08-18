@@ -11,10 +11,21 @@ import { indent } from '@milkdown/kit/plugin/indent'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { upload, uploadConfig, type Uploader } from '@milkdown/kit/plugin/upload'
 import { outline } from '@milkdown/kit/utils'
-import { prism } from '@milkdown/plugin-prism'
+import { prism, prismConfig } from '@milkdown/plugin-prism'
+import mermaidGrammar from 'refractor/mermaid'
+import latexGrammar from 'refractor/latex'
 import { codeBlockCopyPlugin } from '../lib/codeBlockCopy'
 import { localImageViewPlugin } from '../lib/imageView'
 import { createTyporaKeymap } from '../lib/typoraKeymap'
+import {
+  latexCodeBlockSchema,
+  mathBlockInputRule,
+  mathInlineInputRule,
+  mathInlineSchema,
+  normalizeDisplayMath,
+  remarkMathBlockPlugin,
+  remarkMathPlugin
+} from '../lib/math'
 import type { OutlineItem } from '../lib/markdown'
 import { authorizeDroppedFile, isImageFileName, isMarkdownFileName } from '../lib/markdown'
 
@@ -114,7 +125,7 @@ function InnerEditor({
       Editor.make()
         .config((ctx) => {
           ctx.set(rootCtx, root)
-          ctx.set(defaultValueCtx, initialRef.current)
+          ctx.set(defaultValueCtx, normalizeDisplayMath(initialRef.current))
           ctx.set(editorViewOptionsCtx, {
             attributes: {
               class: 'md-body',
@@ -133,6 +144,12 @@ function InnerEditor({
         })
         .use(commonmark)
         .use(gfm)
+        .use(remarkMathPlugin)
+        .use(remarkMathBlockPlugin)
+        .use(mathInlineSchema)
+        .use(mathInlineInputRule)
+        .use(mathBlockInputRule)
+        .use(latexCodeBlockSchema)
         .use(history)
         .use(clipboard)
         // The upload plugin must be registered before the cursor plugin:
@@ -145,6 +162,43 @@ function InnerEditor({
         .use(listener)
         .use(codeBlockCopyPlugin)
         .use(localImageViewPlugin)
+        .config((ctx) => {
+          ctx.update(prismConfig.key, (prev) => ({
+            ...prev,
+            configureRefractor: (instance) => {
+              const configured = prev.configureRefractor(instance) ?? instance
+              if (!configured.registered('mermaid')) configured.register(mermaidGrammar)
+              if (!configured.registered('latex')) configured.register(latexGrammar)
+              configured.alias('mermaid', [
+                'flowchart',
+                'graph',
+                'sequence',
+                'sequencediagram',
+                'class',
+                'classdiagram',
+                'state',
+                'statediagram',
+                'er',
+                'erdiagram',
+                'gantt',
+                'pie',
+                'journey',
+                'mindmap',
+                'timeline',
+                'gitgraph',
+                'quadrantchart',
+                'xychart',
+                'block',
+                'sankey',
+                'packet',
+                'requirement',
+                'c4context'
+              ])
+              configured.alias('latex', 'LaTeX')
+              return configured
+            }
+          }))
+        })
         .use(prism)
         // Typora-style shortcuts (Ctrl+1..6 headings, Ctrl+K link, Ctrl+Shift+K
         // code fence, Ctrl+T table, Ctrl+Shift+I image, Ctrl+\\ clear format, …).

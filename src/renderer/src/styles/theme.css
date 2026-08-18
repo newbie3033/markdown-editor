@@ -1335,6 +1335,80 @@ li.ProseMirror-selectednode::after {
   margin: 0;
   padding-right: 72px;
 }
+.code-block-wrap[data-preview-kind][data-source-visible='false'] > pre {
+  display: none;
+}
+.code-block-wrap[data-preview-kind][data-source-visible='true'] > pre {
+  margin-bottom: 10px;
+}
+.diagram-preview {
+  margin: 0;
+  padding: 18px;
+  overflow: auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+.diagram-preview[hidden] {
+  display: none;
+}
+.diagram-preview svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+.diagram-preview.formula-preview {
+  overflow-x: auto;
+  color: var(--text);
+  font-size: 1rem;
+}
+.diagram-preview.formula-preview .katex-display {
+  margin: 0;
+}
+.diagram-preview.diagram-error {
+  color: #b42318;
+  background: color-mix(in srgb, #f04438 8%, var(--bg-secondary));
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+:root[data-theme='dark'] .diagram-preview.diagram-error {
+  color: #ffb4ab;
+}
+.mermaid-preview > div {
+  min-width: min-content;
+}
+.diagram-export {
+  margin: 0 0 16px;
+  padding: 18px;
+  overflow: auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  text-align: center;
+}
+.diagram-export svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+.formula-export {
+  margin: 0 0 16px;
+  padding: 8px 0;
+  overflow-x: auto;
+  color: var(--text);
+  text-align: center;
+}
+.formula-export .katex-display {
+  margin: 0;
+}
 .code-copy-btn {
   position: absolute;
   top: 8px;

@@ -610,6 +610,143 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     check('copy button shows feedback', codeCopy?.label === '已复制', String(codeCopy?.label))
     check('prism highlighting preserved', codeCopy?.hasToken === true, String(codeCopy?.hasToken))
 
+    // 9c. Math and Mermaid previews keep their Markdown representation while
+    // rendering inline in the WYSIWYG editor.
+    await fs.writeFile(
+      join(TEST_DIR, 'docs', 'diagram-test.md'),
+      [
+        '# Diagram Test',
+        '',
+        'Inline math: $E = mc^2$.',
+        '',
+        '$$\\begin{bmatrix} X \\\\ Y \\\\ Z \\end{bmatrix}$$',
+        '',
+        '$$p_i = \\begin{cases}',
+        '1, & r_i \\le c \\\\',
+        '0, & r_i > c',
+        '\\end{cases}$$',
+        '',
+        '## Formula Tail',
+        '',
+        '```mermaid',
+        'flowchart LR',
+        '  A[Start] --> B["Done\\nNext line"]',
+        '```',
+        ''
+      ].join('\n')
+    )
+    win.webContents.send(IPC.openPath, `${TEST_DIR}/docs/diagram-test.md`)
+    const diagrams = (await js(`(async () => {
+      for (let i = 0; i < 40; i += 1) {
+        const rendered = document.querySelector('.inkmark-math-inline .katex') &&
+          document.querySelector('.formula-preview .katex') &&
+          document.querySelector('.mermaid-preview svg')
+        if (rendered) break
+        await new Promise(r => setTimeout(r, 250))
+      }
+      return {
+        inline: !!document.querySelector('.inkmark-math-inline .katex'),
+        block: !!document.querySelector('.formula-preview .katex'),
+        blockCount: document.querySelectorAll('.formula-preview .katex').length,
+        mermaid: !!document.querySelector('.mermaid-preview svg'),
+        mermaidNewline: !!document.querySelector('.mermaid-preview svg br') &&
+          !document.querySelector('.mermaid-preview svg')?.textContent?.includes('\\n'),
+        formulaTail: Array.from(document.querySelectorAll('.ProseMirror h2'))
+          .some(heading => heading.textContent === 'Formula Tail'),
+        sourcesHidden: Array.from(document.querySelectorAll('.code-block-wrap[data-preview-kind]'))
+          .every(wrap => getComputedStyle(wrap.querySelector('pre')).display === 'none'),
+        markdown: window.__inkmarkGetMarkdown()
+      }
+    })()`)) as {
+      inline?: boolean
+      block?: boolean
+      blockCount?: number
+      mermaid?: boolean
+      mermaidNewline?: boolean
+      formulaTail?: boolean
+      sourcesHidden?: boolean
+      markdown?: string
+    }
+    check('inline math renders with KaTeX', diagrams?.inline === true, JSON.stringify(diagrams))
+    check(
+      'compact and multiline block math render with KaTeX',
+      diagrams?.block === true && diagrams.blockCount === 2 && diagrams.formulaTail === true,
+      JSON.stringify(diagrams)
+    )
+    check('Mermaid flowchart renders as SVG', diagrams?.mermaid === true, JSON.stringify(diagrams))
+    check('Mermaid escaped newline renders as a line break', diagrams?.mermaidNewline === true)
+    check('math and Mermaid editable source is hidden by default', diagrams?.sourcesHidden === true)
+    check(
+      'math and Mermaid Markdown round-trip',
+      diagrams?.markdown?.includes('$E = mc^2$') === true &&
+        diagrams.markdown.includes('$$') &&
+        diagrams.markdown.includes('```mermaid') &&
+        diagrams.markdown.includes('Done\\nNext line'),
+      diagrams?.markdown ?? ''
+    )
+    const previewSourceToggle = (await js(`(async () => {
+      const preview = document.querySelector('.formula-preview')
+      const wrap = preview?.closest('.code-block-wrap')
+      if (!preview || !wrap) return { ok: false }
+      preview.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true, clientX: 320, clientY: 260
+      }))
+      await new Promise(r => setTimeout(r, 300))
+      const show = Array.from(document.querySelectorAll('.ctx-item'))
+        .find(item => item.textContent.includes('显示可编辑源码'))
+      if (!show) return { ok: false, showFound: false }
+      show.click()
+      await new Promise(r => setTimeout(r, 200))
+      const revealed = wrap.dataset.sourceVisible === 'true' &&
+        getComputedStyle(wrap.querySelector('pre')).display !== 'none'
+
+      preview.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true, clientX: 320, clientY: 260
+      }))
+      await new Promise(r => setTimeout(r, 300))
+      const hide = Array.from(document.querySelectorAll('.ctx-item'))
+        .find(item => item.textContent.includes('隐藏可编辑源码'))
+      if (hide) hide.click()
+      await new Promise(r => setTimeout(r, 200))
+      return {
+        ok: true,
+        showFound: true,
+        revealed,
+        hideFound: !!hide,
+        hiddenAgain: wrap.dataset.sourceVisible === 'false' &&
+          getComputedStyle(wrap.querySelector('pre')).display === 'none'
+      }
+    })()`)) as {
+      ok?: boolean
+      showFound?: boolean
+      revealed?: boolean
+      hideFound?: boolean
+      hiddenAgain?: boolean
+    }
+    check(
+      'preview context menu toggles editable source',
+      previewSourceToggle?.ok === true &&
+        previewSourceToggle.revealed === true &&
+        previewSourceToggle.hideFound === true &&
+        previewSourceToggle.hiddenAgain === true,
+      JSON.stringify(previewSourceToggle)
+    )
+    const diagramHtml = (await js(`window.__inkmarkBuildExportHtml()`)) as string
+    check(
+      'HTML export renders inline and block math with embedded KaTeX fonts',
+      diagramHtml.includes('class="formula-export"') &&
+        diagramHtml.includes('data-type="math_inline"') &&
+        diagramHtml.includes('class="katex"') &&
+        diagramHtml.includes('data:font/woff2;base64,') &&
+        !diagramHtml.includes('url(fonts/'),
+      `len=${diagramHtml.length}`
+    )
+    check(
+      'HTML export includes rendered Mermaid SVG',
+      diagramHtml.includes('class="diagram-export"') && diagramHtml.includes('<svg'),
+      `len=${diagramHtml.length}`
+    )
+
     // 10. Folder-wide keyword search (content + filename).
     await fs.writeFile(
       join(TEST_DIR, 'docs', 'search-test.md'),
@@ -1141,7 +1278,7 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     await fs.writeFile(join(TEST_DIR, 'docs', 'assets', 'export.png'), png)
     await fs.writeFile(
       join(TEST_DIR, 'docs', 'export-test.md'),
-      '# Export Test\n\n![img](assets/export.png)\n'
+      '# Export Test\n\nInline: $E = mc^2$.\n\n$$\\frac{a}{b} = \\sqrt{x}$$\n\n![img](assets/export.png)\n'
     )
     win.webContents.send(IPC.openPath, `${TEST_DIR}/docs/export-test.md`)
     await sleep(1200)
@@ -1159,6 +1296,9 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
         typeof html === 'string' &&
           html.includes('class="md-body"') &&
           html.includes('src="assets/export.png"') &&
+          html.includes('class="formula-export"') &&
+          html.includes('data:font/woff2;base64,') &&
+          !html.includes('url(fonts/') &&
           html.includes('rotate(45deg)'),
         `len=${html?.length ?? 0}`
       )
@@ -1169,6 +1309,8 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
         'export html embeds local image',
         htmlContent.length > 0 &&
           htmlContent.includes('class="md-body"') &&
+          htmlContent.includes('class="formula-export"') &&
+          htmlContent.includes('data:font/woff2;base64,') &&
           htmlContent.includes('src="data:image/png;base64,'),
         `len=${htmlContent.length}`
       )
