@@ -1,6 +1,11 @@
 import type { Node as ProseMirrorNode } from '@milkdown/kit/prose/model'
 import { InputRule } from '@milkdown/kit/prose/inputrules'
-import { Plugin, TextSelection } from '@milkdown/kit/prose/state'
+import {
+  Plugin,
+  TextSelection,
+  type EditorState,
+  type Transaction
+} from '@milkdown/kit/prose/state'
 import { $inputRule, $nodeSchema, $prose, $remark, $useKeymap } from '@milkdown/kit/utils'
 
 interface MarkdownAstNode {
@@ -390,6 +395,96 @@ function commentDepthAt(position: TextSelection['$from']): number {
     if (position.node(depth).type.name === 'html_comment') return depth
   }
   return -1
+}
+
+/**
+ * Toggle an HTML comment without flattening block structure or inline atoms.
+ * A text selection becomes a closed comment; an empty selection creates an
+ * open comment. Running the command inside a comment restores its text.
+ */
+export function toggleHtmlComment(
+  state: EditorState,
+  dispatch?: (transaction: Transaction) => void
+): boolean {
+  const type = state.schema.nodes.html_comment
+  if (!type) return false
+
+  const { $from, $to, from, to, empty } = state.selection
+  const fromDepth = commentDepthAt($from)
+  const toDepth = commentDepthAt($to)
+
+  if (
+    fromDepth >= 0 &&
+    toDepth >= 0 &&
+    $from.before(fromDepth) === $to.before(toDepth)
+  ) {
+    if (!dispatch) return true
+
+    const comment = $from.node(fromDepth)
+    const nodeStart = $from.before(fromDepth)
+    const contentStart = nodeStart + 1
+    const fromOffset = Math.max(0, from - contentStart)
+    const toOffset = Math.max(0, to - contentStart)
+    const replacement = comment.textContent
+      ? state.schema.text(comment.textContent, comment.marks)
+      : null
+    const transaction = replacement
+      ? state.tr.replaceWith(nodeStart, nodeStart + comment.nodeSize, replacement)
+      : state.tr.delete(nodeStart, nodeStart + comment.nodeSize)
+
+    if (replacement) {
+      transaction.setSelection(
+        TextSelection.create(
+          transaction.doc,
+          nodeStart + Math.min(fromOffset, replacement.nodeSize),
+          nodeStart + Math.min(toOffset, replacement.nodeSize)
+        )
+      )
+    } else {
+      transaction.setSelection(TextSelection.near(transaction.doc.resolve(nodeStart)))
+    }
+    dispatch(transaction.scrollIntoView())
+    return true
+  }
+
+  // A single inline comment cannot safely represent a cross-block selection
+  // or a selection containing images, math, hard breaks, or other inline atoms.
+  if (!$from.sameParent($to) || !$from.parent.inlineContent) return false
+
+  if (empty) {
+    if (!dispatch) return true
+    const marks = state.storedMarks ?? $from.marks()
+    const node = type.create({ leading: '', trailing: '', closed: false }, undefined, marks)
+    const transaction = state.tr.replaceSelectionWith(node)
+    transaction.setSelection(TextSelection.create(transaction.doc, from + 1))
+    dispatch(transaction.scrollIntoView())
+    return true
+  }
+
+  let textOnly = true
+  state.doc.nodesBetween(from, to, (node) => {
+    if (node.isInline && !node.isText) {
+      textOnly = false
+      return false
+    }
+    return textOnly
+  })
+  if (!textOnly) return false
+
+  const content = state.doc.textBetween(from, to)
+  if (!content || content.includes('-->')) return false
+  if (!dispatch) return true
+
+  const marks = $from.marksAcross($to) ?? []
+  const node = type.create(
+    { leading: '', trailing: '', closed: true },
+    state.schema.text(content),
+    marks
+  )
+  const transaction = state.tr.replaceRangeWith(from, to, node)
+  transaction.setSelection(TextSelection.create(transaction.doc, from + 1, from + 1 + content.length))
+  dispatch(transaction.scrollIntoView())
+  return true
 }
 
 export const htmlCommentKeymap = $useKeymap('htmlComment', {

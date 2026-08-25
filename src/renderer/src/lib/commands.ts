@@ -17,6 +17,7 @@ import {
   wrapInOrderedListCommand
 } from '@milkdown/kit/preset/commonmark'
 import { insertTableCommand, toggleStrikethroughCommand } from '@milkdown/kit/preset/gfm'
+import { toggleHtmlComment } from './htmlComment'
 
 export type ContextMenuAction =
   | 'copy'
@@ -29,6 +30,7 @@ export type ContextMenuAction =
   | 'italic'
   | 'strikethrough'
   | 'inlineCode'
+  | 'comment'
   | 'link'
   | 'image'
   | 'quote'
@@ -142,6 +144,12 @@ export function runContextAction(
       break
     case 'inlineCode':
       editor.action(callCommand(toggleInlineCodeCommand.key))
+      break
+    case 'comment':
+      editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        toggleHtmlComment(view.state, view.dispatch)
+      })
       break
     case 'quote':
       editor.action(callCommand(wrapInBlockquoteCommand.key))

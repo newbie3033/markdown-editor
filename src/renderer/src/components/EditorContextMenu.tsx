@@ -18,7 +18,7 @@ interface EditorContextMenuProps {
 
 interface Item {
   action: ContextMenuAction
-  labelKey: 'ctx.copy' | 'ctx.cut' | 'ctx.paste' | 'ctx.h1' | 'ctx.h2' | 'ctx.h3' | 'ctx.bold' | 'ctx.italic' | 'ctx.strikethrough' | 'ctx.inlineCode' | 'ctx.link' | 'ctx.image' | 'ctx.quote' | 'ctx.codeBlock' | 'ctx.bulletList' | 'ctx.orderedList' | 'ctx.taskList' | 'ctx.table' | 'ctx.hr' | 'ctx.paragraph'
+  labelKey: 'ctx.copy' | 'ctx.cut' | 'ctx.paste' | 'ctx.h1' | 'ctx.h2' | 'ctx.h3' | 'ctx.bold' | 'ctx.italic' | 'ctx.strikethrough' | 'ctx.inlineCode' | 'ctx.comment' | 'ctx.link' | 'ctx.image' | 'ctx.quote' | 'ctx.codeBlock' | 'ctx.bulletList' | 'ctx.orderedList' | 'ctx.taskList' | 'ctx.table' | 'ctx.hr' | 'ctx.paragraph'
   shortcut?: string
 }
 
@@ -37,7 +37,8 @@ const GROUPS: Item[][] = [
     { action: 'bold', labelKey: 'ctx.bold', shortcut: 'Ctrl+B' },
     { action: 'italic', labelKey: 'ctx.italic', shortcut: 'Ctrl+I' },
     { action: 'strikethrough', labelKey: 'ctx.strikethrough', shortcut: 'Alt+Shift+5' },
-    { action: 'inlineCode', labelKey: 'ctx.inlineCode', shortcut: 'Ctrl+Shift+`' }
+    { action: 'inlineCode', labelKey: 'ctx.inlineCode', shortcut: 'Ctrl+Shift+`' },
+    { action: 'comment', labelKey: 'ctx.comment', shortcut: 'Ctrl+Alt+/' }
   ],
   [
     { action: 'link', labelKey: 'ctx.link', shortcut: 'Ctrl+K' },

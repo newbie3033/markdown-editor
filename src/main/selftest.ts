@@ -1278,7 +1278,7 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     await fs.writeFile(join(TEST_DIR, 'docs', 'assets', 'export.png'), png)
     await fs.writeFile(
       join(TEST_DIR, 'docs', 'export-test.md'),
-      '# Export Test <!-- heading id export secret -->\n\n## Equation $x$ <!-- math heading export secret -->\n\nInline: $E = mc^2$. <!-- inline export secret -->\n\n*Marked before <!-- emphasis export secret --> marked after.*\n\n[Link before <!-- link export secret --> link after](https://example.com)\n\nKeyboard: <!-- keyboard edit secret --> after keyboard.\n\nLiteral less: 2 < 3 <!-- less-than export secret -->\n\n<!--\n# Comment heading export secret\nComment body export secret\n-->\n\n<!-- first mixed export secret --><span>visible html suffix</span><!-- second mixed export secret -->\n\n<div>\n<!-- nested export secret -->\n</div>\n\n<pre>\n<!-- pre export secret -->\ntext\n</pre>\n\n<!-- trailing export secret -->   \n\n<span title="<!--">attribute marker remains</span>\n\n$$\\frac{a}{b} = \\sqrt{x}$$\n\n![img](assets/export.png)\n\nTyping target:\n\nCode typing target:\n\nAttribute typing target:\n'
+      '# Export Test <!-- heading id export secret -->\n\n## Equation $x$ <!-- math heading export secret -->\n\nInline: $E = mc^2$. <!-- inline export secret -->\n\n*Marked before <!-- emphasis export secret --> marked after.*\n\n[Link before <!-- link export secret --> link after](https://example.com)\n\nKeyboard: <!-- keyboard edit secret --> after keyboard.\n\nLiteral less: 2 < 3 <!-- less-than export secret -->\n\n<!--\n# Comment heading export secret\nComment body export secret\n-->\n\n<!-- first mixed export secret --><span>visible html suffix</span><!-- second mixed export secret -->\n\n<div>\n<!-- nested export secret -->\n</div>\n\n<pre>\n<!-- pre export secret -->\ntext\n</pre>\n\n<!-- trailing export secret -->   \n\n<span title="<!--">attribute marker remains</span>\n\n$$\\frac{a}{b} = \\sqrt{x}$$\n\n![img](assets/export.png)\n\nMenu comment target\n\nTyping target:\n\nCode typing target:\n\nAttribute typing target:\n'
     )
     win.webContents.send(IPC.openPath, `${TEST_DIR}/docs/export-test.md`)
     await sleep(1200)
@@ -1353,6 +1353,71 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
         commentState.markdown.includes('<!-- second mixed export secret -->'),
       JSON.stringify(commentState)
     )
+
+    const contextComment = (await js(`(async () => {
+      const paragraph = Array.from(document.querySelectorAll('.ProseMirror p'))
+        .find((node) => node.textContent === 'Menu comment target')
+      const text = paragraph?.firstChild
+      const pm = document.querySelector('.ProseMirror')
+      if (!(text instanceof Text) || !(pm instanceof HTMLElement)) return { ok: false }
+      const start = text.data.indexOf('comment')
+      const range = document.createRange()
+      range.setStart(text, start)
+      range.setEnd(text, start + 'comment'.length)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      pm.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 420,
+        clientY: 320
+      }))
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      const button = Array.from(document.querySelectorAll('.ctx-menu .ctx-item'))
+        .find((item) => item.querySelector('.ctx-label')?.textContent === '注释')
+      const shortcut = button?.querySelector('.ctx-shortcut')?.textContent
+      button?.click()
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      return {
+        ok: !!button,
+        shortcut,
+        count: document.querySelectorAll('.ProseMirror .md-comment').length,
+        markdown: window.__inkmarkGetMarkdown()
+      }
+    })()`)) as { ok?: boolean; shortcut?: string | null; count?: number; markdown?: string }
+    check(
+      'context menu comments the selected text and shows its shortcut',
+      contextComment.ok === true &&
+        contextComment.shortcut === 'Ctrl+Alt+/' &&
+        contextComment.count === 14 &&
+        contextComment.markdown?.includes('Menu <!--comment--> target') === true,
+      JSON.stringify(contextComment)
+    )
+
+    win.webContents.sendInputEvent({
+      type: 'keyDown',
+      keyCode: '/',
+      modifiers: ['control', 'alt']
+    })
+    win.webContents.sendInputEvent({
+      type: 'keyUp',
+      keyCode: '/',
+      modifiers: ['control', 'alt']
+    })
+    await sleep(300)
+    const shortcutComment = (await js(`(() => ({
+      count: document.querySelectorAll('.ProseMirror .md-comment').length,
+      markdown: window.__inkmarkGetMarkdown()
+    }))()`)) as { count?: number; markdown?: string }
+    check(
+      'Ctrl+Alt+/ removes the comment while preserving its text',
+      shortcutComment.count === 13 &&
+        shortcutComment.markdown?.includes('Menu comment target') === true &&
+        !shortcutComment.markdown.includes('Menu <!--comment--> target'),
+      JSON.stringify(shortcutComment)
+    )
+
     await js(`(() => {
       const content = Array.from(document.querySelectorAll('.ProseMirror .md-comment-content'))
         .find((node) => node.textContent?.includes('inline export secret'))

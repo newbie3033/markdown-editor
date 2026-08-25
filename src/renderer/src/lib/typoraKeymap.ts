@@ -16,6 +16,7 @@ import { keymap } from '@milkdown/prose/keymap'
 import type { EditorState, Transaction } from '@milkdown/prose/state'
 import { $prose } from '@milkdown/kit/utils'
 import { applyLinkToCtx } from './commands'
+import { toggleHtmlComment } from './htmlComment'
 import { tStatic } from './i18n'
 
 export interface TyporaKeymapOptions {
@@ -35,6 +36,7 @@ export interface TyporaKeymapOptions {
  *   Ctrl+K         hyperlink         Ctrl+Shift+I  insert image
  *   Ctrl+Shift+[ / Ctrl+Shift+]      ordered / unordered list
  *   Ctrl+T         table             Ctrl+\\     clear format
+ *   Ctrl+Alt+/     toggle HTML comment
  *
  * The keymap plugin is appended after the presets; none of these keys collide
  * with Milkdown's default bindings (Mod-b, Mod-i, Mod-e, Mod-Alt-*, …).
@@ -152,6 +154,7 @@ export function createTyporaKeymap(options: TyporaKeymapOptions): MilkdownPlugin
       'Shift-Mod-]': () => commands.call(wrapInBulletListCommand.key),
       'Mod-t': () => commands.call(insertTableCommand.key, { row: 3, col: 3 }),
       'Mod-\\': clearFormat,
+      'Alt-Mod-/': toggleHtmlComment,
       'Shift-Mod-i': imageShortcut
     })
   })
