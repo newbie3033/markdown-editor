@@ -1278,10 +1278,285 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     await fs.writeFile(join(TEST_DIR, 'docs', 'assets', 'export.png'), png)
     await fs.writeFile(
       join(TEST_DIR, 'docs', 'export-test.md'),
-      '# Export Test\n\nInline: $E = mc^2$.\n\n$$\\frac{a}{b} = \\sqrt{x}$$\n\n![img](assets/export.png)\n'
+      '# Export Test <!-- heading id export secret -->\n\n## Equation $x$ <!-- math heading export secret -->\n\nInline: $E = mc^2$. <!-- inline export secret -->\n\n*Marked before <!-- emphasis export secret --> marked after.*\n\n[Link before <!-- link export secret --> link after](https://example.com)\n\nKeyboard: <!-- keyboard edit secret --> after keyboard.\n\nLiteral less: 2 < 3 <!-- less-than export secret -->\n\n<!--\n# Comment heading export secret\nComment body export secret\n-->\n\n<!-- first mixed export secret --><span>visible html suffix</span><!-- second mixed export secret -->\n\n<div>\n<!-- nested export secret -->\n</div>\n\n<pre>\n<!-- pre export secret -->\ntext\n</pre>\n\n<!-- trailing export secret -->   \n\n<span title="<!--">attribute marker remains</span>\n\n$$\\frac{a}{b} = \\sqrt{x}$$\n\n![img](assets/export.png)\n\nTyping target:\n\nCode typing target:\n\nAttribute typing target:\n'
     )
     win.webContents.send(IPC.openPath, `${TEST_DIR}/docs/export-test.md`)
     await sleep(1200)
+    const commentState = (await js(`(() => ({
+      comments: Array.from(document.querySelectorAll('.ProseMirror .md-comment')).map((node) => ({
+        text: node.textContent,
+        hasContent: !!node.querySelector('.md-comment-content'),
+        contenteditable: node.querySelector('.md-comment-content')?.getAttribute('contenteditable'),
+        delimiterCount: node.querySelectorAll('.md-comment-delimiter').length,
+        delimitersProtected: Array.from(node.querySelectorAll('.md-comment-delimiter')).every(
+          (delimiter) => delimiter.getAttribute('contenteditable') === 'false'
+        )
+      })),
+      headings: Array.from(document.querySelectorAll('.ProseMirror h1,.ProseMirror h2')).map((node) => ({
+        text: node.textContent,
+        id: node.id
+      })),
+      outline: Array.from(document.querySelectorAll('.outline-text')).map((node) => node.textContent),
+      emphasis: document.querySelector('.ProseMirror em')?.textContent,
+      link: document.querySelector('.ProseMirror a[href="https://example.com"]')?.textContent,
+      markdown: window.__inkmarkGetMarkdown()
+    }))()`)) as {
+      comments?: Array<{
+        text?: string | null
+        hasContent?: boolean
+        contenteditable?: string | null
+        delimiterCount?: number
+        delimitersProtected?: boolean
+      }>
+      headings?: Array<{ text?: string | null; id?: string }>
+      outline?: Array<string | null>
+      emphasis?: string | null
+      link?: string | null
+      markdown?: string
+    }
+    check(
+      'html comments preserve marks, mixed HTML, heading IDs, and outline semantics',
+      commentState.comments?.length === 13 &&
+        commentState.comments.every(
+          (value) =>
+            value.hasContent === true &&
+            value.contenteditable !== 'false' &&
+            value.delimiterCount === 2 &&
+            value.delimitersProtected === true
+        ) &&
+        commentState.comments.some((value) => value.text?.includes('inline export secret')) &&
+        commentState.comments.some((value) => value.text?.includes('Comment heading export secret')) &&
+        commentState.comments.some((value) => value.text?.includes('second mixed export secret')) &&
+        commentState.comments.some((value) => value.text?.includes('nested export secret')) &&
+        commentState.comments.some((value) => value.text?.includes('less-than export secret')) &&
+        commentState.comments.some((value) => value.text?.includes('pre export secret')) &&
+        commentState.headings?.length === 2 &&
+        commentState.headings[0]?.id === 'export-test' &&
+        commentState.headings[1]?.id === 'equation' &&
+        commentState.outline?.includes('Export Test') === true &&
+        commentState.outline.includes('Equation') &&
+        commentState.outline.every((value) => !value?.includes('heading id export secret')) &&
+        commentState.emphasis?.includes('marked after') === true &&
+        commentState.link?.includes('link after') === true &&
+        commentState.markdown?.includes('<!-- inline export secret -->') === true &&
+        commentState.markdown.includes('# Comment heading export secret') &&
+        commentState.markdown.includes(
+          '*Marked before <!-- emphasis export secret --> marked after.*'
+        ) &&
+        commentState.markdown.includes(
+          '[Link before <!-- link export secret --> link after](https://example.com)'
+        ) &&
+        commentState.markdown.includes('Literal less: 2 < 3 <!-- less-than export secret -->') &&
+        commentState.markdown.includes('<div>\n<!-- nested export secret -->\n</div>') &&
+        commentState.markdown.includes('<pre>\n<!-- pre export secret -->\ntext\n</pre>') &&
+        commentState.markdown.includes('visible html suffix') &&
+        commentState.markdown.includes('<!-- second mixed export secret -->'),
+      JSON.stringify(commentState)
+    )
+    await js(`(() => {
+      const content = Array.from(document.querySelectorAll('.ProseMirror .md-comment-content'))
+        .find((node) => node.textContent?.includes('inline export secret'))
+      const text = content?.firstChild
+      if (!(text instanceof Text)) return false
+      document.querySelector('.ProseMirror')?.focus()
+      const range = document.createRange()
+      range.setStart(text, Math.min(1, text.data.length))
+      range.collapse(true)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      return document.execCommand('insertText', false, 'edited ')
+    })()`)
+    await sleep(300)
+    const editedCommentMarkdown = (await js(`window.__inkmarkGetMarkdown()`)) as string | null
+    check(
+      'html comment content accepts direct WYSIWYG edits while delimiters stay intact',
+      editedCommentMarkdown?.includes('<!-- edited inline export secret -->') === true,
+      editedCommentMarkdown ?? ''
+    )
+
+    const enterTargeted = (await js(`(() => {
+      const content = Array.from(document.querySelectorAll('.ProseMirror .md-comment-content'))
+        .find((node) => node.textContent?.includes('keyboard edit secret'))
+      const text = content?.firstChild
+      if (!(content instanceof HTMLElement) || !(text instanceof Text)) return false
+      const offset = text.data.indexOf('keyboard') + 'keyboard'.length
+      document.querySelector('.ProseMirror')?.focus()
+      const range = document.createRange()
+      range.setStart(text, offset)
+      range.collapse(true)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      return selection?.anchorNode === text && selection.anchorOffset === offset
+    })()`)) as boolean
+    await sleep(100)
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'ENTER' })
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'ENTER' })
+    await sleep(200)
+    const newlineCommentState = (await js(`(() => ({
+      count: document.querySelectorAll('.ProseMirror .md-comment').length,
+      markdown: window.__inkmarkGetMarkdown()
+    }))()`)) as { count?: number; markdown?: string }
+    check(
+      'Enter inserts one literal newline without creating extra comment delimiters',
+      enterTargeted === true &&
+        newlineCommentState.count === 13 &&
+        newlineCommentState.markdown?.includes('<!-- keyboard\n edit secret -->') === true &&
+        !newlineCommentState.markdown.includes('-->\n\n<!-- edit secret'),
+      JSON.stringify(newlineCommentState)
+    )
+
+    const arrowTargeted = (await js(`(() => {
+      const content = Array.from(document.querySelectorAll('.ProseMirror .md-comment-content'))
+        .find((node) => node.textContent?.includes('keyboard\\n edit secret'))
+      const text = content?.firstChild
+      if (!(text instanceof Text)) return false
+      document.querySelector('.ProseMirror')?.focus()
+      const range = document.createRange()
+      range.setStart(text, text.data.length)
+      range.collapse(true)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      return selection?.anchorNode === text && selection.anchorOffset === text.data.length
+    })()`)) as boolean
+    await sleep(100)
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'RIGHT' })
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'RIGHT' })
+    await sleep(100)
+    await win.webContents.insertText('X')
+    await sleep(150)
+    const arrowCommentState = (await js(`(() => ({
+      content: Array.from(document.querySelectorAll('.ProseMirror .md-comment-content'))
+        .find((node) => node.textContent?.includes('keyboard'))?.textContent,
+      markdown: window.__inkmarkGetMarkdown()
+    }))()`)) as { content?: string; markdown?: string }
+    check(
+      'ArrowRight exits a comment without changing its delimiters',
+      arrowTargeted === true &&
+        arrowCommentState.content === ' keyboard\n edit secret ' &&
+        arrowCommentState.markdown?.includes(
+          '<!-- keyboard\n edit secret -->X after keyboard.'
+        ) === true,
+      JSON.stringify(arrowCommentState)
+    )
+
+    await js(`(() => {
+      const paragraph = Array.from(document.querySelectorAll('.ProseMirror p'))
+        .find((node) => node.textContent?.trim() === 'Typing target:')
+      const text = paragraph?.firstChild
+      if (!(paragraph instanceof HTMLElement) || !(text instanceof Text)) return false
+      const range = document.createRange()
+      range.setStart(text, text.data.length)
+      range.collapse(true)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      paragraph.focus()
+      return true
+    })()`)
+    for (const character of ' <!-- typed export secret') {
+      await win.webContents.insertText(character)
+    }
+    await sleep(150)
+    const beforeTypedClose = (await js(`(() => ({
+      count: document.querySelectorAll('.ProseMirror .md-comment').length,
+      closed: Array.from(document.querySelectorAll('.ProseMirror .md-comment'))
+        .at(-1)?.getAttribute('data-closed'),
+      markdown: window.__inkmarkGetMarkdown()
+    }))()`)) as { count?: number; closed?: string | null; markdown?: string }
+    check(
+      'typing an opener creates an open comment without adding a closing delimiter',
+      beforeTypedClose.count === 14 &&
+        beforeTypedClose.closed === 'false' &&
+        beforeTypedClose.markdown?.includes('<!-- typed export secret') === true &&
+        !beforeTypedClose.markdown.includes('typed export secret -->'),
+      JSON.stringify(beforeTypedClose)
+    )
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'ENTER' })
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'ENTER' })
+    for (const character of 'second line -->') {
+      await win.webContents.insertText(character)
+    }
+    await sleep(200)
+    const afterTypedClose = (await js(`(() => ({
+      count: document.querySelectorAll('.ProseMirror .md-comment').length,
+      markdown: window.__inkmarkGetMarkdown()
+    }))()`)) as { count?: number; markdown?: string }
+    check(
+      'a fully typed comment is recognized without inserting source characters',
+      afterTypedClose.count === 14 &&
+        afterTypedClose.markdown?.includes(
+          'Typing target: <!-- typed export secret\nsecond line -->'
+        ) === true,
+      JSON.stringify(afterTypedClose)
+    )
+
+    await js(`(() => {
+      const paragraph = Array.from(document.querySelectorAll('.ProseMirror p'))
+        .find((node) => node.textContent?.trim() === 'Code typing target:')
+      const text = paragraph?.firstChild
+      if (!(text instanceof Text)) return false
+      const range = document.createRange()
+      range.setStart(text, text.data.length)
+      range.collapse(true)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      return true
+    })()`)
+    for (const character of ' `<!-- code marker -->`') {
+      await win.webContents.insertText(character)
+    }
+    await sleep(150)
+    const codeTypingState = (await js(`(() => ({
+      count: document.querySelectorAll('.ProseMirror .md-comment').length,
+      code: Array.from(document.querySelectorAll('.ProseMirror code'))
+        .some((node) => node.textContent === '<!-- code marker -->'),
+      markdown: window.__inkmarkGetMarkdown()
+    }))()`)) as { count?: number; code?: boolean; markdown?: string }
+    check(
+      'comment syntax typed inside inline code remains ordinary code',
+      codeTypingState.count === 14 &&
+        codeTypingState.code === true &&
+        codeTypingState.markdown?.includes('`<!-- code marker -->`') === true,
+      JSON.stringify(codeTypingState)
+    )
+
+    await js(`(() => {
+      const paragraph = Array.from(document.querySelectorAll('.ProseMirror p'))
+        .find((node) => node.textContent?.trim() === 'Attribute typing target:')
+      const text = paragraph?.firstChild
+      if (!(text instanceof Text)) return false
+      const range = document.createRange()
+      range.setStart(text, text.data.length)
+      range.collapse(true)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      return true
+    })()`)
+    for (const character of ' <span title="<!-- marker -->">visible</span>') {
+      await win.webContents.insertText(character)
+    }
+    await sleep(150)
+    const attributeTypingState = (await js(`(() => ({
+      count: document.querySelectorAll('.ProseMirror .md-comment').length,
+      markdown: window.__inkmarkGetMarkdown()
+    }))()`)) as { count?: number; markdown?: string }
+    check(
+      'comment syntax typed inside an HTML attribute remains ordinary text',
+      attributeTypingState.count === 14 &&
+        attributeTypingState.markdown?.includes('title="\\<!-- marker -->"') === true,
+      JSON.stringify({
+        count: attributeTypingState.count,
+        tail: attributeTypingState.markdown?.slice(
+          attributeTypingState.markdown.indexOf('Attribute typing target:')
+        )
+      })
+    )
+
     const EXPORT_DIR = join(TEST_DIR, 'export')
     await fs.mkdir(EXPORT_DIR, { recursive: true })
     const originalShowSave = dialog.showSaveDialog.bind(dialog)
@@ -1290,7 +1565,17 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       filePath: join(EXPORT_DIR, basename(options?.defaultPath ?? 'document.html'))
     })) as typeof dialog.showSaveDialog
     try {
-      const html = (await js(`window.__inkmarkBuildExportHtml()`)) as string
+      const exportResult = (await js(`(() => {
+        const html = window.__inkmarkBuildExportHtml()
+        const template = document.createElement('template')
+        template.innerHTML = html
+        const rendered = 'img,video,audio,canvas,svg,math,iframe,object,embed,input,textarea,select,button,br,hr,table,pre,[data-type="math_inline"]'
+        const emptyParagraphs = Array.from(template.content.querySelectorAll('p')).filter(
+          (paragraph) => !paragraph.textContent?.trim() && !paragraph.querySelector(rendered)
+        ).length
+        return { html, emptyParagraphs }
+      })()`)) as { html?: string; emptyParagraphs?: number }
+      const html = exportResult.html ?? ''
       check(
         'export html built with portable source before main-process embedding',
         typeof html === 'string' &&
@@ -1299,8 +1584,31 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
           html.includes('class="formula-export"') &&
           html.includes('data:font/woff2;base64,') &&
           !html.includes('url(fonts/') &&
-          html.includes('rotate(45deg)'),
-        `len=${html?.length ?? 0}`
+          html.includes('rotate(45deg)') &&
+          html.includes('id="export-test"') &&
+          html.includes('id="equation"') &&
+          html.includes('visible html suffix') &&
+          html.includes('attribute marker remains') &&
+          html.includes('Marked before') &&
+          html.includes('marked after') &&
+          html.includes('Link before') &&
+          html.includes('link after') &&
+          exportResult.emptyParagraphs === 0 &&
+          !html.includes('inline export secret') &&
+          !html.includes('heading id export secret') &&
+          !html.includes('emphasis export secret') &&
+          !html.includes('link export secret') &&
+          !html.includes('keyboard edit secret') &&
+          !html.includes('Comment heading export secret') &&
+          !html.includes('first mixed export secret') &&
+          !html.includes('second mixed export secret') &&
+          !html.includes('nested export secret') &&
+          !html.includes('less-than export secret') &&
+          !html.includes('pre export secret') &&
+          !html.includes('math heading export secret') &&
+          !html.includes('trailing export secret') &&
+          !html.includes('typed export secret'),
+        `len=${html.length}, emptyParagraphs=${exportResult.emptyParagraphs ?? -1}`
       )
       await js(`window.api.exportHtml('test-doc', ${JSON.stringify(html)}, ${JSON.stringify(join(TEST_DIR, 'docs', 'export-test.md'))})`)
       const htmlFile = join(EXPORT_DIR, 'test-doc.html')

@@ -1267,6 +1267,19 @@ li.ProseMirror-selectednode::after {
   text-decoration: line-through;
 }
 
+/* HTML comments remain editable in the live document, but are visually
+   de-emphasized like Typora's `.md-comment` nodes. */
+.md-body .md-comment {
+  color: var(--text-muted);
+  opacity: 0.8;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.md-body .md-comment.ProseMirror-selectednode {
+  opacity: 1;
+}
+
 .md-body ul,
 .md-body ol {
   padding-left: 2em;
@@ -1753,6 +1766,12 @@ body.export-page .md-body {
   max-width: 820px;
   margin: 0 auto;
   padding: 48px 40px 80px;
+}
+
+/* Defensive fallback: the export builder removes these nodes before the
+   document reaches this page. */
+body.export-page [data-type='html_comment'] {
+  display: none !important;
 }
 
 /* Startup: placeholder shown while the editor chunk loads. */

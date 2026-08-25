@@ -10,6 +10,10 @@ export interface DocStats {
   lines: number
 }
 
+export function headingIdFromText(text: string): string {
+  return text.toLowerCase().trim().replace(/\s+/g, '-')
+}
+
 const CJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/
 
 /** Rough, Typora-like word count: CJK chars each count as one word. */

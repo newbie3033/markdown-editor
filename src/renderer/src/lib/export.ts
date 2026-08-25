@@ -14,6 +14,59 @@ function addRenderedPreviews(bodyHtml: string): string {
   const template = document.createElement('template')
   template.innerHTML = bodyHtml
 
+  // Milkdown represents raw HTML as inert spans. Comments stay visible while
+  // editing, but Typora-style exports must omit them entirely.
+  const commentParagraphs = new Set<HTMLParagraphElement>()
+  for (const commentNode of Array.from(
+    template.content.querySelectorAll<HTMLElement>('[data-type="html_comment"]')
+  )) {
+    const paragraph = commentNode.closest('p')
+    if (paragraph) commentParagraphs.add(paragraph)
+    const whitespace = `${commentNode.dataset.leading ?? ''}${commentNode.dataset.trailing ?? ''}`
+    if (whitespace) commentNode.replaceWith(document.createTextNode(whitespace))
+    else commentNode.remove()
+  }
+
+  // Also remove native comment nodes in case a future serializer emits raw
+  // HTML comments instead of Milkdown's inert span representation.
+  const commentWalker = document.createTreeWalker(template.content, NodeFilter.SHOW_COMMENT)
+  const comments: Comment[] = []
+  while (commentWalker.nextNode()) comments.push(commentWalker.currentNode as Comment)
+  for (const comment of comments) {
+    const paragraph = comment.parentElement?.closest('p')
+    if (paragraph) commentParagraphs.add(paragraph)
+    comment.remove()
+  }
+
+  // CommonMark wraps block-level raw HTML in a paragraph for Milkdown's
+  // inline schema. Remove that wrapper when comments were its only rendered
+  // content, including empty mark wrappers left around a removed comment.
+  const renderedElementSelector = [
+    'img',
+    'video',
+    'audio',
+    'canvas',
+    'svg',
+    'math',
+    'iframe',
+    'object',
+    'embed',
+    'input',
+    'textarea',
+    'select',
+    'button',
+    'br',
+    'hr',
+    'table',
+    'pre',
+    '[data-type="math_inline"]'
+  ].join(',')
+  for (const paragraph of commentParagraphs) {
+    if (!paragraph.textContent?.trim() && !paragraph.querySelector(renderedElementSelector)) {
+      paragraph.remove()
+    }
+  }
+
   for (const inlineMath of Array.from(
     template.content.querySelectorAll<HTMLElement>('span[data-type="math_inline"]')
   )) {

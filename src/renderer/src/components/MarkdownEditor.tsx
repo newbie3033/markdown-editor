@@ -1,7 +1,13 @@
 import { useEffect, useRef } from 'react'
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from '@milkdown/react'
-import { Editor, rootCtx, defaultValueCtx, editorViewOptionsCtx } from '@milkdown/kit/core'
-import { commonmark } from '@milkdown/kit/preset/commonmark'
+import {
+  Editor,
+  rootCtx,
+  defaultValueCtx,
+  editorViewCtx,
+  editorViewOptionsCtx
+} from '@milkdown/kit/core'
+import { commonmark, headingIdGenerator } from '@milkdown/kit/preset/commonmark'
 import { gfm } from '@milkdown/kit/preset/gfm'
 import { history } from '@milkdown/kit/plugin/history'
 import { clipboard } from '@milkdown/kit/plugin/clipboard'
@@ -10,7 +16,6 @@ import { trailing } from '@milkdown/kit/plugin/trailing'
 import { indent } from '@milkdown/kit/plugin/indent'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { upload, uploadConfig, type Uploader } from '@milkdown/kit/plugin/upload'
-import { outline } from '@milkdown/kit/utils'
 import { prism, prismConfig } from '@milkdown/plugin-prism'
 import mermaidGrammar from 'refractor/mermaid'
 import latexGrammar from 'refractor/latex'
@@ -27,7 +32,21 @@ import {
   remarkMathPlugin
 } from '../lib/math'
 import type { OutlineItem } from '../lib/markdown'
-import { authorizeDroppedFile, isImageFileName, isMarkdownFileName } from '../lib/markdown'
+import {
+  authorizeDroppedFile,
+  headingIdFromText,
+  isImageFileName,
+  isMarkdownFileName
+} from '../lib/markdown'
+import {
+  htmlCommentClosePlugin,
+  htmlCommentInputRule,
+  htmlCommentKeymap,
+  htmlCommentSchema,
+  outlineWithoutHtmlComments,
+  remarkHtmlCommentPlugin,
+  textWithoutHtmlComments
+} from '../lib/htmlComment'
 
 interface EditorProps {
   initialMarkdown: string
@@ -126,6 +145,9 @@ function InnerEditor({
         .config((ctx) => {
           ctx.set(rootCtx, root)
           ctx.set(defaultValueCtx, normalizeDisplayMath(initialRef.current))
+          ctx.set(headingIdGenerator.key, (node) =>
+            headingIdFromText(textWithoutHtmlComments(node))
+          )
           ctx.set(editorViewOptionsCtx, {
             attributes: {
               class: 'md-body',
@@ -139,10 +161,15 @@ function InnerEditor({
           }))
           ctx.get(listenerCtx).markdownUpdated((ctx, markdown) => {
             onChangeRef.current(markdown)
-            onOutlineRef.current(outline()(ctx))
+            onOutlineRef.current(outlineWithoutHtmlComments(ctx.get(editorViewCtx).state.doc))
           })
         })
         .use(commonmark)
+        .use(htmlCommentSchema)
+        .use(remarkHtmlCommentPlugin)
+        .use(htmlCommentInputRule)
+        .use(htmlCommentClosePlugin)
+        .use(htmlCommentKeymap)
         .use(gfm)
         .use(remarkMathPlugin)
         .use(remarkMathBlockPlugin)
