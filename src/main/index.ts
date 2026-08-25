@@ -5,6 +5,7 @@ import { IPC } from '../shared/ipc'
 import { grantDocumentAccess, registerLocalProtocols, registerIpc } from './ipc'
 import { buildMenu, rebuildMenu } from './menu'
 import { initLocale } from './i18n'
+import { checkForUpdates } from './update'
 
 // Portable mode (Windows portable exe): the launcher sets
 // PORTABLE_EXECUTABLE_DIR to the directory of the exe. Keep all app data in a
@@ -102,6 +103,7 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
+    if (app.isPackaged) void checkForUpdates(mainWindow, true)
   })
 
   // Closing the window is routed through the renderer: it asks about

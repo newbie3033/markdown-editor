@@ -44,6 +44,7 @@ const messages = {
     'menu.toggleFullscreen': 'Toggle Full Screen',
     'menu.toggleDevTools': 'Toggle Developer Tools',
     'menu.help': 'Help',
+    'menu.checkForUpdates': 'Check for Updates…',
     'menu.about': 'About InkMark',
     'menu.editMode': 'Edit Mode',
     'menu.readOnlyMode': 'Read-only Mode',
@@ -82,6 +83,15 @@ const messages = {
     'dialog.aboutMessage': 'InkMark — a Typora-style Markdown editor',
     'dialog.aboutDetail': 'Version {version}\nRepository: https://github.com/newbie3033/markdown-editor',
     'dialog.openRepo': 'Open repository',
+    'dialog.updateAvailableTitle': 'A new InkMark version is available',
+    'dialog.updateAvailableDetail': 'Current version: {current}\nLatest version: {latest}\n\nOpen the Release page to download it?',
+    'dialog.downloadUpdate': 'Open Release page',
+    'dialog.later': 'Later',
+    'dialog.upToDateTitle': 'InkMark is up to date',
+    'dialog.upToDateDetail': 'You are using the latest version ({version}).',
+    'dialog.updateCheckFailedTitle': 'Could not check for updates',
+    'dialog.updateCheckFailedDetail': 'Check your network connection, or open the Release page to check manually.',
+    'dialog.openReleases': 'Open Release page',
     'dialog.ok': 'OK'
   },
   zh: {
@@ -124,6 +134,7 @@ const messages = {
     'menu.toggleFullscreen': '切换全屏',
     'menu.toggleDevTools': '切换开发者工具',
     'menu.help': '帮助',
+    'menu.checkForUpdates': '检查更新…',
     'menu.about': '关于 InkMark',
     'menu.editMode': '编辑模式',
     'menu.readOnlyMode': '只读模式',
@@ -162,6 +173,15 @@ const messages = {
     'dialog.aboutMessage': 'InkMark — 一款 Typora 风格的 Markdown 编辑器',
     'dialog.aboutDetail': '版本 {version}\n开源仓库：https://github.com/newbie3033/markdown-editor',
     'dialog.openRepo': '打开开源仓库',
+    'dialog.updateAvailableTitle': '发现 InkMark 新版本',
+    'dialog.updateAvailableDetail': '当前版本：{current}\n最新版本：{latest}\n\n是否打开 Release 页面下载？',
+    'dialog.downloadUpdate': '打开 Release 页面',
+    'dialog.later': '稍后',
+    'dialog.upToDateTitle': 'InkMark 已是最新版本',
+    'dialog.upToDateDetail': '当前使用的已是最新版本（{version}）。',
+    'dialog.updateCheckFailedTitle': '无法检查更新',
+    'dialog.updateCheckFailedDetail': '请检查网络连接，或打开 Release 页面手动查看。',
+    'dialog.openReleases': '打开 Release 页面',
     'dialog.ok': '确定'
   }
 } as const

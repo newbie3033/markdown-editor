@@ -255,6 +255,9 @@ export type ExternalChangeChoice = 'reload' | 'saveAs' | 'keep'
 /** Open-source repository URL (shown in the About dialog and Help menu). */
 export const REPOSITORY_URL = 'https://github.com/newbie3033/markdown-editor'
 
+/** Download page for the newest published GitHub Release. */
+export const RELEASES_URL = `${REPOSITORY_URL}/releases/latest`
+
 export interface InkMarkApi {
   openFileDialog(): Promise<FileResult>
   saveFileDialog(

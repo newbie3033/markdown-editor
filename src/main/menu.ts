@@ -1,6 +1,7 @@
 import { BaseWindow, BrowserWindow, Menu, MenuItemConstructorOptions, shell } from 'electron'
 import { IPC, REPOSITORY_URL, type Lang, type MenuAction } from '../shared/ipc'
 import { getLocale, t } from './i18n'
+import { checkForUpdates } from './update'
 
 let getWindowRef: () => BrowserWindow | null = () => null
 let readOnlyMode = false
@@ -179,6 +180,11 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
     {
       label: t('menu.help'),
       submenu: [
+        {
+          label: t('menu.checkForUpdates'),
+          click: () => void checkForUpdates(getWindowRef(), false)
+        },
+        { type: 'separator' },
         {
           label: t('menu.repository'),
           click: () => void shell.openExternal(REPOSITORY_URL)

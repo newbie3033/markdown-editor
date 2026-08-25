@@ -194,8 +194,11 @@ git tag v1.0.2
 git push origin v1.0.2
 ```
 
-The Help menu links to the open-source repository
-(https://github.com/newbie3033/markdown-editor), and *Help → About* shows the
+On packaged builds, InkMark checks GitHub Releases at startup. When a newer
+semantic version is available, it offers to open the latest Release page in the
+system browser so the user can choose and download the appropriate package.
+*Help → Check for Updates…* runs the same check manually. The Help menu also
+links to the open-source repository, and *Help → About* shows the current
 version with a one-click button to open the repository.
 
 | Platform | Artifacts |
