@@ -57,6 +57,10 @@ export default function App(): React.JSX.Element {
   const [showOutline, setShowOutline] = usePersistentBoolean('inkmark.showOutline', true)
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('files')
   const [findOpen, setFindOpen] = useState(false)
+  const [findQueryRequest, setFindQueryRequest] = useState<{
+    id: number
+    text: string
+  } | null>(null)
   const [replaceOpen, setReplaceOpen] = useState(false)
   const [readOnly, setReadOnly] = useState(false)
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
@@ -857,6 +861,25 @@ export default function App(): React.JSX.Element {
     })
   }, [])
 
+  const getFocusedEditorSelection = useCallback((): string | null => {
+    if (sourceModeRef.current) {
+      const textarea = textareaRef.current
+      if (!textarea || document.activeElement !== textarea) return null
+      const { selectionStart, selectionEnd } = textarea
+      if (selectionStart === selectionEnd) return null
+      return textarea.value.slice(selectionStart, selectionEnd)
+    }
+
+    let selectedText: string | null = null
+    editorRef.current?.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      const { selection, doc } = view.state
+      if (!view.hasFocus() || selection.empty) return
+      selectedText = doc.textBetween(selection.from, selection.to, '\n')
+    })
+    return selectedText
+  }, [])
+
   const handleMenuAction = useCallback(
     (action: MenuAction) => {
       switch (action) {
@@ -891,9 +914,21 @@ export default function App(): React.JSX.Element {
           void print()
           break
         case 'find':
+          if (findOpen) {
+            const selectedText = getFocusedEditorSelection()
+            if (selectedText) {
+              setFindQueryRequest((previous) => ({
+                id: (previous?.id ?? 0) + 1,
+                text: selectedText
+              }))
+            }
+          } else {
+            setFindQueryRequest(null)
+          }
           setFindOpen(true)
           break
         case 'replace':
+          if (!findOpen) setFindQueryRequest(null)
           setFindOpen(true)
           setReplaceOpen(true)
           break
@@ -982,6 +1017,8 @@ export default function App(): React.JSX.Element {
       setLang,
       showSidebar,
       sidebarTab,
+      findOpen,
+      getFocusedEditorSelection,
       t
     ]
   )
@@ -1174,7 +1211,11 @@ export default function App(): React.JSX.Element {
               const nextDirty = normalizeMarkdown(text) !== normalizeMarkdown(cleanContentRef.current ?? '')
               setDirty(nextDirty)
             }}
-            onClose={() => setFindOpen(false)}
+            queryRequest={findQueryRequest}
+            onClose={() => {
+              setFindOpen(false)
+              setFindQueryRequest(null)
+            }}
           />
         )}
         <div

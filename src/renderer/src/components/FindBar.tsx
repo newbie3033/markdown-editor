@@ -24,6 +24,8 @@ interface FindBarProps {
   onToggleReplace: () => void
   /** Applies replaced text in source mode (updates the document state). */
   onSourceReplace: (text: string) => void
+  /** A repeated Ctrl+F request seeded from the current editor selection. */
+  queryRequest: { id: number; text: string } | null
 }
 
 export function FindBar({
@@ -34,7 +36,8 @@ export function FindBar({
   onClose,
   replaceOpen,
   onToggleReplace,
-  onSourceReplace
+  onSourceReplace,
+  queryRequest
 }: FindBarProps): React.JSX.Element {
   const { t } = useI18n()
   const [query, setQuery] = useState('')
@@ -49,6 +52,12 @@ export function FindBar({
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
+
+  useEffect(() => {
+    if (!queryRequest) return
+    setQuery(queryRequest.text)
+    inputRef.current?.focus()
+  }, [queryRequest])
 
   // Focus the replace input when the replace row opens (Ctrl+H).
   useEffect(() => {

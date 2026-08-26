@@ -1002,6 +1002,40 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       return true
     })()`)
 
+    // With the find bar already open, Ctrl+F should use a non-empty editor
+    // selection as the new query and immediately run that search.
+    const findSelectionReady = (await js(`(() => {
+      const editor = document.querySelector('.ProseMirror')
+      if (!editor) return false
+      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT)
+      let node
+      while ((node = walker.nextNode())) {
+        const index = node.textContent?.indexOf('world') ?? -1
+        if (index < 0) continue
+        const range = document.createRange()
+        range.setStart(node, index)
+        range.setEnd(node, index + 'world'.length)
+        const selection = window.getSelection()
+        selection?.removeAllRanges()
+        selection?.addRange(range)
+        editor.focus()
+        return selection?.toString() === 'world'
+      }
+      return false
+    })()`)) as boolean
+    await sleep(200)
+    win.webContents.send(IPC.menuAction, 'find')
+    await sleep(700)
+    const selectionFind = (await js(`(() => ({
+      query: document.querySelector('.findbar input')?.value,
+      count: document.querySelector('.find-count')?.textContent?.trim()
+    }))()`)) as { query?: string; count?: string }
+    check(
+      'Ctrl+F searches the selected editor text when find is already open',
+      findSelectionReady && selectionFind?.query === 'world' && selectionFind?.count === '1/1',
+      JSON.stringify({ findSelectionReady, ...selectionFind })
+    )
+
     // Close the find bar.
     await js(`(document.querySelector('.findbar .find-btn:last-child')?.click(), true)`)
 
