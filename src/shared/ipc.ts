@@ -118,6 +118,36 @@ export interface TextRange {
   to: number
 }
 
+export type StorageCategoryId =
+  | 'application'
+  | 'cache'
+  | 'logs'
+  | 'crashReports'
+  | 'backups'
+  | 'recovery'
+  | 'preferences'
+
+export interface StorageCategory {
+  id: StorageCategoryId
+  bytes: number
+  files: number
+  cleanable: boolean
+}
+
+export interface StorageStats {
+  categories: StorageCategory[]
+  totalBytes: number
+  cleanableBytes: number
+  scannedAt: number
+}
+
+export interface StorageCleanupResult {
+  canceled: boolean
+  freedBytes: number
+  failed: StorageCategoryId[]
+  stats: StorageStats
+}
+
 /** VS Code-style search options. All default to false. */
 export interface SearchFlags {
   /** Match character case exactly (default: case-insensitive). */
@@ -195,6 +225,7 @@ export type MenuAction =
   | 'zoom-in'
   | 'zoom-out'
   | 'zoom-reset'
+  | 'storage'
   | 'about'
 
 export const IPC = {
@@ -237,6 +268,8 @@ export const IPC = {
   setReadOnly: 'app:set-read-only',
   getLocale: 'app:get-locale',
   setLocale: 'app:set-locale',
+  getStorageStats: 'storage:stats',
+  cleanStorage: 'storage:clean',
   menuAction: 'menu:action',
   openPath: 'file:open-path',
   // Renderer announces that its IPC listeners are registered; the main
@@ -303,6 +336,8 @@ export interface InkMarkApi {
   confirmRecovery(fileName: string, updatedAt: number): Promise<RecoveryChoice>
   getLocale(): Promise<Lang>
   setLocale(lang: Lang): Promise<void>
+  getStorageStats(): Promise<StorageStats>
+  cleanStorage(categories: StorageCategoryId[]): Promise<StorageCleanupResult>
   onMenuAction(callback: (action: MenuAction) => void): () => void
   onOpenPath(callback: (path: string) => void): () => void
   onFileChanged(callback: (path: string) => void): () => void

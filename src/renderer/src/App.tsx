@@ -11,6 +11,7 @@ import { OutlinePanel } from './components/OutlinePanel'
 import { StatusBar } from './components/StatusBar'
 import { EditorContextMenu } from './components/EditorContextMenu'
 import { FindBar } from './components/FindBar'
+import { StorageManager } from './components/StorageManager'
 import { buildHtmlDocument } from './lib/export'
 import { appendImage } from './lib/commands'
 import { findTextMatchesAsync, selectMatch } from './lib/search'
@@ -67,6 +68,7 @@ export default function App(): React.JSX.Element {
   } | null>(null)
   const [zoomLevel, setZoomLevel] = useState(0)
   const [recoveryReady, setRecoveryReady] = useState(false)
+  const [storageOpen, setStorageOpen] = useState(false)
   const zoomRef = useRef(0)
   const leftSidebar = useResizableWidth('inkmark.sidebarWidth')
   const outlineSidebar = useResizableWidth('inkmark.outlineWidth')
@@ -949,6 +951,9 @@ export default function App(): React.JSX.Element {
         case 'about':
           void window.api.showAbout()
           break
+        case 'storage':
+          setStorageOpen(true)
+          break
         case 'zoom-in':
           applyZoom(zoomRef.current + 0.5)
           break
@@ -1264,6 +1269,11 @@ export default function App(): React.JSX.Element {
             onClose={() => setCtxMenu(null)}
           />
         )}
+      <StorageManager
+        open={storageOpen}
+        protectRecovery={dirty}
+        onClose={() => setStorageOpen(false)}
+      />
     </div>
   )
 }

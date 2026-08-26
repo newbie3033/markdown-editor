@@ -62,6 +62,11 @@ engine), packaged for Windows, macOS, and Linux with **electron-builder**.
   directory. Unsaved work is periodically stored in a private
   `recovery-draft.json`; startup verifies it against the disk file and asks
   before restoring it, while a successful save clears it immediately.
+- **Storage manager** — *Help → Storage* shows the space used by application
+  files, caches, logs, crash reports, previous-version backups, recovery data,
+  and local preferences. Cleanable categories can be selected independently;
+  cleanup requires a native confirmation, while application files and settings
+  remain protected. An active unsaved recovery draft is locked against removal.
 - **Bounded file access** — renderer file operations are limited to files and
   folders the user selected, opened through the OS, or dragged into the app.
   Large files/images and expensive regex shapes are rejected before they can

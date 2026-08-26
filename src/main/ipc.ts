@@ -41,6 +41,10 @@ import {
   type SearchMatch,
   type SearchFlags,
   type RegexTextSegment,
+  type StorageCategory,
+  type StorageCategoryId,
+  type StorageCleanupResult,
+  type StorageStats,
   type TextRange,
   type WriteFileResult
 } from '../shared/ipc'
@@ -1159,14 +1163,254 @@ async function saveImage(payload: SaveImagePayload): Promise<SaveImageResult | n
   return { src: `assets/${targetName.replace(/\\/g, '/')}` }
 }
 
+interface StorageUsage {
+  bytes: number
+  files: number
+}
+
+const CLEANABLE_STORAGE_CATEGORIES = new Set<StorageCategoryId>([
+  'cache',
+  'logs',
+  'crashReports',
+  'backups',
+  'recovery'
+])
+
+function storagePathKey(path: string): string {
+  const normalized = resolve(path)
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+function uniqueStoragePaths(paths: string[]): string[] {
+  const seen = new Set<string>()
+  return paths.filter((path) => {
+    const key = storagePathKey(path)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function storageTargets(): Record<StorageCategoryId, string[]> {
+  const userData = app.getPath('userData')
+  const crashRoot = app.getPath('crashDumps')
+  const cache = [
+    'Cache',
+    'Code Cache',
+    'GPUCache',
+    'DawnCache',
+    'GrShaderCache',
+    'GraphiteDawnCache',
+    'ShaderCache',
+    join('Service Worker', 'CacheStorage')
+  ].map((name) => join(userData, name))
+
+  let application: string
+  if (process.env['PORTABLE_EXECUTABLE_FILE']) {
+    application = process.env['PORTABLE_EXECUTABLE_FILE']
+  } else if (process.env['APPIMAGE']) {
+    application = process.env['APPIMAGE']
+  } else if (app.isPackaged) {
+    application = process.platform === 'darwin'
+      ? resolve(dirname(process.execPath), '..')
+      : dirname(process.execPath)
+  } else {
+    application = app.getAppPath()
+  }
+
+  return {
+    application: [application],
+    cache,
+    logs: [app.getPath('logs')],
+    // Keep Crashpad's database settings intact; only report payloads and
+    // their attachments are disposable.
+    crashReports: ['completed', 'pending', 'new', 'attachments'].map((name) =>
+      join(crashRoot, name)
+    ),
+    backups: [join(userData, BACKUP_DIR)],
+    recovery: [recoveryPath()],
+    preferences: [userData]
+  }
+}
+
+async function measureStoragePath(
+  path: string,
+  excluded: ReadonlySet<string>,
+  depth = 0
+): Promise<StorageUsage> {
+  if (depth > 64 || excluded.has(storagePathKey(path))) return { bytes: 0, files: 0 }
+  let stat
+  try {
+    stat = await fs.lstat(path)
+  } catch {
+    return { bytes: 0, files: 0 }
+  }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    return { bytes: stat.size, files: 1 }
+  }
+
+  let names: string[]
+  try {
+    names = await fs.readdir(path)
+  } catch {
+    return { bytes: 0, files: 0 }
+  }
+  const total: StorageUsage = { bytes: 0, files: 0 }
+  // Walk sequentially to avoid exhausting file descriptors on installations
+  // with many small packaged assets (or a large development node_modules).
+  for (const name of names) {
+    const child = await measureStoragePath(join(path, name), excluded, depth + 1)
+    total.bytes += child.bytes
+    total.files += child.files
+  }
+  return total
+}
+
+async function measureStorageTargets(
+  paths: string[],
+  excluded: ReadonlySet<string> = new Set()
+): Promise<StorageUsage> {
+  const usages = await Promise.all(
+    uniqueStoragePaths(paths).map((path) => measureStoragePath(path, excluded))
+  )
+  return usages.reduce<StorageUsage>(
+    (total, usage) => ({ bytes: total.bytes + usage.bytes, files: total.files + usage.files }),
+    { bytes: 0, files: 0 }
+  )
+}
+
+async function getStorageStats(): Promise<StorageStats> {
+  const targets = storageTargets()
+  const managedDataPaths = uniqueStoragePaths([
+    ...targets.cache,
+    ...targets.logs,
+    ...targets.crashReports,
+    ...targets.backups,
+    ...targets.recovery
+  ])
+  const userDataKey = storagePathKey(targets.preferences[0])
+  const preferencesExclusions = new Set(
+    managedDataPaths
+      .filter((path) => {
+        const key = storagePathKey(path)
+        return key === userDataKey || key.startsWith(`${userDataKey}${sep}`)
+      })
+      .map(storagePathKey)
+  )
+  const applicationExclusions = new Set([userDataKey])
+
+  const ids: StorageCategoryId[] = [
+    'application',
+    'cache',
+    'logs',
+    'crashReports',
+    'backups',
+    'recovery',
+    'preferences'
+  ]
+  const usages = await Promise.all(
+    ids.map((id) =>
+      measureStorageTargets(
+        targets[id],
+        id === 'preferences'
+          ? preferencesExclusions
+          : id === 'application'
+            ? applicationExclusions
+            : undefined
+      )
+    )
+  )
+  const categories: StorageCategory[] = ids.map((id, index) => ({
+    id,
+    bytes: usages[index].bytes,
+    files: usages[index].files,
+    cleanable: CLEANABLE_STORAGE_CATEGORIES.has(id)
+  }))
+  return {
+    categories,
+    totalBytes: categories.reduce((sum, category) => sum + category.bytes, 0),
+    cleanableBytes: categories
+      .filter((category) => category.cleanable)
+      .reduce((sum, category) => sum + category.bytes, 0),
+    scannedAt: Date.now()
+  }
+}
+
+async function clearStorageTarget(path: string): Promise<void> {
+  let stat
+  try {
+    stat = await fs.lstat(path)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    await fs.unlink(path)
+    return
+  }
+  const names = await fs.readdir(path)
+  const removals = await Promise.allSettled(
+    names.map((name) =>
+      fs.rm(join(path, name), { recursive: true, force: true, maxRetries: 2, retryDelay: 100 })
+    )
+  )
+  const failed = removals.find((result) => result.status === 'rejected')
+  if (failed?.status === 'rejected') throw failed.reason
+}
+
+async function cleanStorageCategories(categories: StorageCategoryId[]): Promise<StorageCategoryId[]> {
+  const targets = storageTargets()
+  const userDataKey = storagePathKey(app.getPath('userData'))
+  const failed: StorageCategoryId[] = []
+  for (const id of categories) {
+    const removals = await Promise.allSettled(
+      uniqueStoragePaths(targets[id]).map(async (path) => {
+        if (storagePathKey(path) === userDataKey) {
+          throw new Error('Refusing to clean the user data root')
+        }
+        await clearStorageTarget(path)
+      })
+    )
+    const errors = removals.filter((result) => result.status === 'rejected')
+    if (errors.length > 0) {
+      console.warn(`Failed to fully clean storage category ${id}`, errors)
+      failed.push(id)
+    }
+  }
+  return failed
+}
+
+function storageCategoryName(id: StorageCategoryId): string {
+  switch (id) {
+    case 'cache': return t('storage.cache')
+    case 'logs': return t('storage.logs')
+    case 'crashReports': return t('storage.crashReports')
+    case 'backups': return t('storage.backups')
+    case 'recovery': return t('storage.recovery')
+    default: return id
+  }
+}
+
+function formatStorageBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = bytes / 1024
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${units[unit]}`
+}
+
 export function registerIpc(getWindow: () => BrowserWindow | null): void {
   let recoveryQueue: Promise<void> = Promise.resolve()
   let watchedFile: FSWatcher | null = null
   let watchedPath: string | null = null
   let watchTimer: NodeJS.Timeout | null = null
-  const queueRecovery = (task: () => Promise<void>): Promise<void> => {
+  const queueRecovery = <Result>(task: () => Promise<Result>): Promise<Result> => {
     const run = recoveryQueue.then(task, task)
-    recoveryQueue = run.catch(() => undefined)
+    recoveryQueue = run.then(() => undefined, () => undefined)
     return run
   }
 
@@ -1701,4 +1945,63 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   handle(IPC.setLocale, (_event, lang: 'en' | 'zh') => {
     setLocale(lang)
   })
+
+  handle(IPC.getStorageStats, async (): Promise<StorageStats> => getStorageStats())
+
+  handle(
+    IPC.cleanStorage,
+    async (_event, requested: StorageCategoryId[]): Promise<StorageCleanupResult> => {
+      if (!Array.isArray(requested) || requested.length > CLEANABLE_STORAGE_CATEGORIES.size) {
+        throw new TypeError('Invalid storage cleanup request')
+      }
+      const categories = Array.from(new Set(requested))
+      if (!categories.every((id) => CLEANABLE_STORAGE_CATEGORIES.has(id))) {
+        throw new TypeError('Invalid storage cleanup category')
+      }
+
+      const before = await getStorageStats()
+      const selectedBefore = before.categories
+        .filter((category) => categories.includes(category.id))
+        .reduce((sum, category) => sum + category.bytes, 0)
+      if (categories.length === 0 || selectedBefore === 0) {
+        return { canceled: false, freedBytes: 0, failed: [], stats: before }
+      }
+
+      const lines = categories.map((id) => {
+        const category = before.categories.find((item) => item.id === id)
+        return `• ${storageCategoryName(id)} — ${formatStorageBytes(category?.bytes ?? 0)}`
+      })
+      const recoveryWarning = categories.includes('recovery')
+        ? `\n\n${t('dialog.cleanStorageRecoveryWarning')}`
+        : ''
+      const options = {
+        type: 'warning' as const,
+        buttons: [t('dialog.cleanStorage'), t('dialog.cancel')],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+        message: t('dialog.cleanStorageTitle'),
+        detail: `${t('dialog.cleanStorageDetail')}\n\n${lines.join('\n')}${recoveryWarning}`
+      }
+      const win = getWindow()
+      const confirmation = win
+        ? await dialog.showMessageBox(win, options)
+        : await dialog.showMessageBox(options)
+      if (confirmation.response !== 0) {
+        return { canceled: true, freedBytes: 0, failed: [], stats: before }
+      }
+
+      const failed = await queueRecovery(() => cleanStorageCategories(categories))
+      const stats = await getStorageStats()
+      const selectedAfter = stats.categories
+        .filter((category) => categories.includes(category.id))
+        .reduce((sum, category) => sum + category.bytes, 0)
+      return {
+        canceled: false,
+        freedBytes: Math.max(0, selectedBefore - selectedAfter),
+        failed,
+        stats
+      }
+    }
+  )
 }

@@ -20,6 +20,9 @@ import {
   type WriteFileResult,
   type RecoveryDraft,
   type RegexTextSegment,
+  type StorageCategoryId,
+  type StorageCleanupResult,
+  type StorageStats,
   type TextRange
 } from '../shared/ipc'
 
@@ -150,6 +153,11 @@ const api: InkMarkApi = {
   getLocale: (): Promise<Lang> => ipcRenderer.invoke(IPC.getLocale),
 
   setLocale: (lang: Lang): Promise<void> => ipcRenderer.invoke(IPC.setLocale, lang),
+
+  getStorageStats: (): Promise<StorageStats> => ipcRenderer.invoke(IPC.getStorageStats),
+
+  cleanStorage: (categories: StorageCategoryId[]): Promise<StorageCleanupResult> =>
+    ipcRenderer.invoke(IPC.cleanStorage, categories),
 
   onMenuAction: (callback: (action: MenuAction) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, action: MenuAction): void =>

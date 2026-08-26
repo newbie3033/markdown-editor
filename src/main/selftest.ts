@@ -94,6 +94,47 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       csp
     )
 
+    // Storage usage is calculated in the main process from fixed app-owned
+    // paths; the renderer receives categories, never filesystem targets.
+    const storageBackupPath = join(app.getPath('userData'), 'backups', 'storage-selftest.tmp')
+    await fs.mkdir(join(app.getPath('userData'), 'backups'), { recursive: true })
+    await fs.writeFile(storageBackupPath, Buffer.alloc(4096, 1))
+    win.webContents.send(IPC.menuAction, 'storage')
+    let storageReady = false
+    for (let i = 0; i < 80; i++) {
+      storageReady = (await js(
+        `document.querySelectorAll('.storage-row').length === 7 && !document.querySelector('.storage-loading')`
+      )) === true
+      if (storageReady) break
+      await sleep(250)
+    }
+    check('storage manager opens with categorized usage', storageReady)
+    const protectedCleanupRejected = (await js(
+      `window.api.cleanStorage(['preferences']).then(() => false, () => true)`
+    )) as boolean
+    check('storage cleanup rejects protected categories', protectedCleanupRejected)
+    const storageMessageBox = dialog.showMessageBox
+    dialog.showMessageBox = (async () => ({
+      response: 0,
+      checkboxChecked: false
+    })) as unknown as typeof dialog.showMessageBox
+    try {
+      const cleanup = (await js(`window.api.cleanStorage(['backups'])`)) as {
+        canceled: boolean
+        freedBytes: number
+        failed: string[]
+      }
+      check(
+        'storage cleanup removes a selected category after confirmation',
+        !cleanup.canceled && cleanup.freedBytes >= 4096 && cleanup.failed.length === 0 &&
+          !existsSync(storageBackupPath),
+        JSON.stringify(cleanup)
+      )
+    } finally {
+      dialog.showMessageBox = storageMessageBox
+    }
+    await js(`document.querySelector('.storage-close')?.click(); true`)
+
     // 0d. Menu accelerators follow the Typora layout: zoom uses the Shift
     // variants (freeing Ctrl+0/=/- for paragraph / heading level), panel keys
     // are Ctrl+Shift+1/2/3/L, Ctrl+H opens replace, and Ctrl+Shift+I is free

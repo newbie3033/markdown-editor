@@ -190,6 +190,11 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
           click: () => void shell.openExternal(REPOSITORY_URL)
         },
         {
+          label: t('menu.storage'),
+          click: (_i, w) => send('storage', w ?? getWindowRef())
+        },
+        { type: 'separator' },
+        {
           label: t('menu.about'),
           click: (_i, w) => send('about', w ?? getWindowRef())
         }
