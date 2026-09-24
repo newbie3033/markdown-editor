@@ -1321,6 +1321,57 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     const menuGone = (await js(`!document.querySelector('.statusbar-menu')`)) as boolean
     check('status bar menu closes on escape', menuGone === true)
 
+    // 12f. Task checkbox clicks update Markdown, but text clicks do not.
+    const taskClickPath = join(TEST_DIR, 'docs', 'task-click.md')
+    await fs.writeFile(taskClickPath, '- [ ] Toggle me\n- [x] Keep checked\n')
+    win.webContents.send(IPC.openPath, taskClickPath)
+    await sleep(800)
+    if ((await js(`!!document.querySelector('.source-editor')`)) === true) {
+      win.webContents.send(IPC.menuAction, 'toggle-source')
+      await sleep(400)
+    }
+    const taskClick = (await js(`(async () => {
+      const task = () => document.querySelector('.md-body li[data-item-type="task"]')
+      if (!task()) return { found: false }
+      const clickBox = () => {
+        const li = task()
+        if (!li) throw new Error('task item disappeared')
+        const box = getComputedStyle(li, '::before')
+        const rect = li.getBoundingClientRect()
+        const x = rect.left + parseFloat(box.left) + parseFloat(box.width) / 2
+        const y = rect.top + parseFloat(box.top) + parseFloat(box.height) / 2
+        if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('task checkbox has no layout')
+        li.dispatchEvent(new MouseEvent('click', {
+          bubbles: true, cancelable: true,
+          clientX: x,
+          clientY: y
+        }))
+      }
+      clickBox()
+      await new Promise(r => setTimeout(r, 100))
+      const checked = task()?.getAttribute('data-checked') === 'true' &&
+        window.__inkmarkGetMarkdown()?.includes('[x] Toggle me')
+      clickBox()
+      await new Promise(r => setTimeout(r, 100))
+      const unchecked = task()?.getAttribute('data-checked') === 'false' &&
+        window.__inkmarkGetMarkdown()?.includes('[ ] Toggle me')
+      const text = task()?.querySelector('p')
+      const textRect = text?.getBoundingClientRect()
+      text?.dispatchEvent(new MouseEvent('click', {
+        bubbles: true, cancelable: true,
+        clientX: (textRect?.left ?? 0) + 5,
+        clientY: (textRect?.top ?? 0) + 5
+      }))
+      await new Promise(r => setTimeout(r, 100))
+      return {
+        found: true, checked, unchecked,
+        textUnchanged: task()?.getAttribute('data-checked') === 'false',
+        markdown: window.__inkmarkGetMarkdown()
+      }
+    })()`)) as { found?: boolean; checked?: boolean; unchecked?: boolean; textUnchanged?: boolean; markdown?: string }
+    check('task checkbox toggles on and off in Markdown', taskClick?.checked === true && taskClick?.unchecked === true, JSON.stringify(taskClick))
+    check('clicking task text does not toggle checkbox', taskClick?.textUnchanged === true, JSON.stringify(taskClick))
+
     // 12f. Read-only / edit mode.
     const ro1 = (await js(`(async () => {
       document.querySelector('.toggle-readonly-btn')?.click()
@@ -1337,6 +1388,24 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       JSON.stringify(ro1)
     )
     check('read-only title suffix', (ro1?.title ?? '').includes('只读'), String(ro1?.title))
+    const readOnlyTask = (await js(`(async () => {
+      const li = document.querySelector('.md-body li[data-item-type="task"]')
+      if (!li) return { found: false }
+      const box = getComputedStyle(li, '::before')
+      const rect = li.getBoundingClientRect()
+      li.dispatchEvent(new MouseEvent('click', {
+        bubbles: true, cancelable: true,
+        clientX: rect.left + parseFloat(box.left) + parseFloat(box.width) / 2,
+        clientY: rect.top + parseFloat(box.top) + parseFloat(box.height) / 2
+      }))
+      await new Promise(r => setTimeout(r, 100))
+      return {
+        found: true,
+        unchecked: li.getAttribute('data-checked') === 'false',
+        markdown: window.__inkmarkGetMarkdown()
+      }
+    })()`)) as { found?: boolean; unchecked?: boolean; markdown?: string }
+    check('read-only blocks task checkbox clicks', readOnlyTask?.unchecked === true && readOnlyTask?.markdown?.includes('[ ] Toggle me') === true, JSON.stringify(readOnlyTask))
     const ro2 = (await js(`(async () => {
       document.querySelector('.ProseMirror').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 500, clientY: 300 }))
       await new Promise(r => setTimeout(r, 400))
