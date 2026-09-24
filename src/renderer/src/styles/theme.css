@@ -1868,6 +1868,7 @@ li.ProseMirror-selectednode::after {
 }
 .md-body li[data-item-type='task']::before {
   content: '';
+  cursor: pointer;
   position: absolute;
   left: -1.35em;
   top: 0.35em;

@@ -1166,6 +1166,32 @@ export default function App(): React.JSX.Element {
   const onEditorClick = useCallback(
     (event: React.MouseEvent) => {
       const target = event.target as HTMLElement | null
+      const taskItem = target?.closest?.('li[data-item-type="task"]') as HTMLLIElement | null
+      if (taskItem && !readOnlyRef.current && !sourceModeRef.current) {
+        const box = getComputedStyle(taskItem, '::before')
+        const rect = taskItem.getBoundingClientRect()
+        const left = rect.left + parseFloat(box.left)
+        const top = rect.top + parseFloat(box.top)
+        const right = left + parseFloat(box.width) + parseFloat(box.borderLeftWidth) + parseFloat(box.borderRightWidth)
+        const bottom = top + parseFloat(box.height) + parseFloat(box.borderTopWidth) + parseFloat(box.borderBottomWidth)
+        if (event.clientX >= left && event.clientX <= right && event.clientY >= top && event.clientY <= bottom) {
+          const editor = editorRef.current
+          if (editor) {
+            editor.action((ctx) => {
+              const view = ctx.get(editorViewCtx)
+              const pos = view.posAtDOM(taskItem, 0) - 1
+              const node = view.state.doc.nodeAt(pos)
+              if (node?.type.name !== 'list_item' || typeof node.attrs.checked !== 'boolean') return
+              view.dispatch(view.state.tr.setNodeMarkup(pos, undefined, {
+                ...node.attrs,
+                checked: !node.attrs.checked
+              }))
+            })
+            event.preventDefault()
+            return
+          }
+        }
+      }
       const anchor = target?.closest?.('a[href]') as HTMLAnchorElement | null
       if (!anchor) return
       event.preventDefault()
