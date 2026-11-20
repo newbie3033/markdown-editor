@@ -5,10 +5,11 @@ import {
   rootCtx,
   defaultValueCtx,
   editorViewCtx,
-  editorViewOptionsCtx
+  editorViewOptionsCtx,
+  remarkStringifyOptionsCtx
 } from '@milkdown/kit/core'
 import { commonmark, headingIdGenerator } from '@milkdown/kit/preset/commonmark'
-import { gfm } from '@milkdown/kit/preset/gfm'
+import { gfm, remarkGFMPlugin } from '@milkdown/kit/preset/gfm'
 import { history } from '@milkdown/kit/plugin/history'
 import { clipboard } from '@milkdown/kit/plugin/clipboard'
 import { cursor } from '@milkdown/kit/plugin/cursor'
@@ -51,7 +52,7 @@ import {
 interface EditorProps {
   initialMarkdown: string
   onReady: (editor: Editor) => void
-  onChange: (markdown: string) => void
+  onChange: () => void
   onOutline: (items: OutlineItem[]) => void
   /** Saves an untitled document before creating a relative image asset. */
   ensureDocPath: () => Promise<string | null>
@@ -145,6 +146,8 @@ function InnerEditor({
         .config((ctx) => {
           ctx.set(rootCtx, root)
           ctx.set(defaultValueCtx, normalizeDisplayMath(initialRef.current))
+          ctx.update(remarkStringifyOptionsCtx, (options) => ({ ...options, bullet: '-' as const }))
+          ctx.set(remarkGFMPlugin.options.key, { tableCellPadding: false, tablePipeAlign: false })
           ctx.set(headingIdGenerator.key, (node) =>
             headingIdFromText(textWithoutHtmlComments(node))
           )
@@ -160,9 +163,9 @@ function InnerEditor({
             uploader: uploaderRef.current as Uploader,
             enableHtmlFileUploader: true
           }))
-          ctx.get(listenerCtx).markdownUpdated((ctx, markdown) => {
-            onChangeRef.current(markdown)
-            onOutlineRef.current(outlineWithoutHtmlComments(ctx.get(editorViewCtx).state.doc))
+          ctx.get(listenerCtx).updated((_ctx, doc) => {
+            onChangeRef.current()
+            onOutlineRef.current(outlineWithoutHtmlComments(doc))
           })
         })
         .use(commonmark)

@@ -2460,6 +2460,65 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     )) as boolean
     check('saved document appears in open folder tree', savedInTree === true)
 
+    const formattedPath = join(TEST_DIR, 'docs', 'source-format.md')
+    const formatted = '# Original\r\n\r\n- First\r\n- Second\r\n\r\n|a|bb|\r\n|---|---|\r\n|c|d|\r\n\r\n$$x^2$$'
+    await fs.writeFile(formattedPath, formatted)
+    win.webContents.send(IPC.openPath, formattedPath)
+    await sleep(450)
+    win.webContents.send(IPC.menuAction, 'save')
+    await sleep(450)
+    check('unchanged visual save preserves exact Markdown', await fs.readFile(formattedPath, 'utf8') === formatted)
+
+    await js(`(() => {
+      const editor = document.querySelector('.ProseMirror')
+      const heading = editor.querySelector('h1')
+      editor.focus()
+      window.getSelection().collapse(heading.firstChild, heading.textContent.length)
+      return document.execCommand('insertText', false, ' edit')
+    })()`)
+    win.webContents.send(IPC.menuAction, 'save')
+    await sleep(650)
+    const formattedEdited = await fs.readFile(formattedPath, 'utf8')
+    const expectedFormattedEdit = formatted.replace('Original', 'Original edit')
+    check('visual edit saves without rewriting the surrounding Markdown',
+      formattedEdited === expectedFormattedEdit, JSON.stringify(formattedEdited))
+
+    await js(`(() => {
+      const editor = document.querySelector('.ProseMirror')
+      editor.focus()
+      const listItem = editor.querySelector('li p')
+      window.getSelection().collapse(listItem.firstChild, listItem.textContent.length)
+      document.execCommand('insertText', false, ' edit')
+      const cell = editor.querySelector('td p')
+      window.getSelection().collapse(cell.firstChild, cell.textContent.length)
+      return document.execCommand('insertText', false, ' longer')
+    })()`)
+    win.webContents.send(IPC.menuAction, 'save')
+    await sleep(650)
+    const expectedInlineEdits = expectedFormattedEdit.replace('- First', '- First edit').replace('|c|d|', '|c longer|d|')
+    const inlineEdits = await fs.readFile(formattedPath, 'utf8')
+    check('visual list and table edits preserve their source style', inlineEdits === expectedInlineEdits, JSON.stringify(inlineEdits))
+
+    win.webContents.send(IPC.menuAction, 'toggle-source')
+    await sleep(450)
+    check('source mode shows preserved Markdown after a visual edit', await js(
+      `document.querySelector('.source-editor')?.value === ${JSON.stringify(expectedInlineEdits.replace(/\r\n/g, '\n'))}`
+    ) === true)
+    await js(`(() => {
+      const textarea = document.querySelector('.source-editor')
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set
+      setter.call(textarea, textarea.value.replace('- First', '+ First').replace('- Second', '+ Second'))
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`)
+    win.webContents.send(IPC.menuAction, 'toggle-source')
+    await sleep(400)
+    win.webContents.send(IPC.menuAction, 'save')
+    await sleep(450)
+    check('source formatting edits survive a switch to visual mode and saving',
+      await fs.readFile(formattedPath, 'utf8') === expectedInlineEdits.replaceAll('\r\n- ', '\r\n+ '))
+    win.webContents.send(IPC.openPath, join(TEST_DIR, 'docs', 'saved-in-folder.md'))
+    await sleep(450)
+
     // 15c. Source mode must save the textarea buffer itself (not the hidden
     // Milkdown document), and New must respect Cancel/Discard.
     win.webContents.send(IPC.menuAction, 'toggle-source')

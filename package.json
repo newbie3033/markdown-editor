@@ -25,6 +25,7 @@
     "@milkdown/plugin-prism": "^7.22.1",
     "@milkdown/react": "^7.22.1",
     "@milkdown/theme-nord": "^7.22.1",
+    "diff": "^9.0.0",
     "katex": "^0.18.4",
     "mermaid": "^11.12.2",
     "refractor": "^5.0.0",

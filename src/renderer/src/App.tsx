@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { editorViewCtx, parserCtx, type Editor } from '@milkdown/kit/core'
-import { DOMSerializer } from '@milkdown/prose/model'
+import { editorViewCtx, parserCtx, serializerCtx, type Editor } from '@milkdown/kit/core'
+import { DOMSerializer, type Node as ProseMirrorNode } from '@milkdown/prose/model'
 import { AllSelection } from '@milkdown/prose/state'
 import { getMarkdown, getHTML, replaceAll as replaceAllRaw } from '@milkdown/kit/utils'
 import { DEFAULT_MERMAID_STYLE, isMermaidStyle, type FileVersion, type MenuAction, type SearchFlags, type ThemePreference } from '../../shared/ipc'
@@ -33,12 +33,10 @@ import {
 import { useI18n, welcomeMarkdown } from './lib/i18n'
 import { DELETE_MERMAID_EVENT, TOGGLE_PREVIEW_SOURCE_EVENT } from './lib/codeBlockCopy'
 import { normalizeDisplayMath } from './lib/math'
+import { normalizeTextareaLineEndings, preserveMarkdownSource } from './lib/markdownSource'
 
 type SaveOutcome = 'saved' | 'canceled' | 'failed' | 'stale'
 
-// Milkdown serializes line endings as LF. Treat CRLF/LF as equivalent, but
-// preserve trailing blank lines: adding/removing them is still a real edit.
-const normalizeMarkdown = (text: string): string => normalizeDisplayMath(text)
 const replaceAll = (markdown: string) => replaceAllRaw(normalizeDisplayMath(markdown))
 
 const sameFileVersion = (left: FileVersion | null, right: FileVersion | null): boolean =>
@@ -94,7 +92,6 @@ export default function App(): React.JSX.Element {
   const editorRef = useRef<Editor | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const markdownRef = useRef(markdown)
-  markdownRef.current = markdown
   const filePathRef = useRef(filePath)
   filePathRef.current = filePath
   const fileVersionRef = useRef<FileVersion | null>(null)
@@ -104,12 +101,13 @@ export default function App(): React.JSX.Element {
   openFilesRef.current = openFiles
   const welcomedRef = useRef(false)
   const recoveryStartedRef = useRef(false)
-  const restoringDraftRef = useRef(false)
-  // The markdown listener fires asynchronously after programmatic document
-  // replacements (open/new/close). Content-based comparison keeps those from
-  // marking the document dirty: the listener echo equals the content we just
-  // loaded, while real edits differ.
-  const cleanContentRef = useRef<string | null>(null)
+  const cleanContentRef = useRef('')
+  const visualSourceRef = useRef({
+    source: '',
+    baseline: '',
+    doc: null as ProseMirrorNode | null,
+    content: ''
+  })
   // Content that must be displayed in the editor once it is ready. The editor
   // mounts lazily (Suspense), so a document opened right at startup can race
   // ahead of it; the pending content is applied on mount instead of being
@@ -120,7 +118,6 @@ export default function App(): React.JSX.Element {
   const readOnlyRef = useRef(readOnly)
   readOnlyRef.current = readOnly
   const sourceModeRef = useRef(sourceMode)
-  sourceModeRef.current = sourceMode
   // Serialize saves so two rapid Ctrl+S actions can never write the same file
   // concurrently. Each queued save reads the latest editor content when it
   // actually begins.
@@ -132,6 +129,35 @@ export default function App(): React.JSX.Element {
   const stats = useMemo(() => computeStats(markdown), [markdown])
   const title = fileNameFromPath(filePath) || t('status.untitled')
 
+  const updateMarkdown = useCallback((content: string) => {
+    markdownRef.current = content
+    setMarkdown(content)
+  }, [])
+
+  const syncVisualEditor = useCallback((content: string) => {
+    const editor = editorRef.current
+    if (!editor) {
+      pendingContentRef.current = content
+      return
+    }
+    editor.action((ctx) => {
+      replaceAll(content)(ctx)
+      const doc = ctx.get(editorViewCtx).state.doc
+      visualSourceRef.current = {
+        source: content,
+        baseline: ctx.get(serializerCtx)(doc),
+        doc,
+        content
+      }
+    })
+    pendingContentRef.current = null
+  }, [])
+
+  const setDocumentContent = useCallback((content: string) => {
+    updateMarkdown(content)
+    syncVisualEditor(content)
+  }, [syncVisualEditor, updateMarkdown])
+
   // Recover the last unsaved revision before accepting queued "open with"
   // paths. A subsequently opened file will go through the normal save/discard
   // confirmation instead of silently replacing the recovered buffer.
@@ -141,13 +167,13 @@ export default function App(): React.JSX.Element {
     void window.api
       .loadRecoveryDraft()
       .then(async (draft) => {
-        if (!draft || normalizeMarkdown(draft.content) === normalizeMarkdown(draft.cleanContent)) return
+        if (!draft || draft.content === draft.cleanContent) return
         if (draft.filePath) {
           try {
             const disk = await window.api.readFile(draft.filePath)
             // A successful save may have beaten the asynchronous draft
             // cleanup during a crash. Never resurrect content already on disk.
-            if (normalizeMarkdown(disk.content) === normalizeMarkdown(draft.content)) {
+            if (disk.content === draft.content) {
               await window.api.clearRecoveryDraft()
               return
             }
@@ -165,11 +191,8 @@ export default function App(): React.JSX.Element {
         setFilePath(draft.filePath)
         filePathRef.current = draft.filePath
         fileVersionRef.current = draft.fileVersion
-        setMarkdown(draft.content)
-        markdownRef.current = draft.content
         cleanContentRef.current = draft.cleanContent
-        pendingContentRef.current = draft.content
-        restoringDraftRef.current = true
+        setDocumentContent(draft.content)
         setSourceMode(draft.sourceMode)
         sourceModeRef.current = draft.sourceMode
         setOpenFiles(draft.filePath ? [draft.filePath] : [])
@@ -180,7 +203,7 @@ export default function App(): React.JSX.Element {
         void window.api.showError(t('error.recoveryFailed'), String(error))
       })
       .finally(() => setRecoveryReady(true))
-  }, [localeReady, t])
+  }, [localeReady, setDocumentContent, t])
 
   // Seed the initial document once locale and crash recovery have completed. The welcome
   // page shows only on the very first launch (persisted in localStorage);
@@ -195,13 +218,11 @@ export default function App(): React.JSX.Element {
         const seen = window.localStorage.getItem('inkmark.welcomeSeen') === '1'
         const initial = seen ? '' : welcomeMarkdown(lang)
         if (!seen) window.localStorage.setItem('inkmark.welcomeSeen', '1')
-        pendingContentRef.current = initial
         cleanContentRef.current = initial
-        setMarkdown(initial)
-        editorRef.current?.action(replaceAll(initial))
+        setDocumentContent(initial)
       }
     }
-  }, [localeReady, recoveryReady, lang])
+  }, [localeReady, recoveryReady, lang, setDocumentContent])
 
   useEffect(() => {
     document.documentElement.dataset.mermaidStyle = mermaidStyle
@@ -268,9 +289,9 @@ export default function App(): React.JSX.Element {
 
   const setReadOnlyMode = useCallback(
     (value: boolean) => {
-      if (value && sourceMode) {
+      if (value && sourceModeRef.current) {
         // Sync the textarea content back and leave source mode first.
-        editorRef.current?.action(replaceAll(markdownRef.current))
+        syncVisualEditor(markdownRef.current)
         sourceModeRef.current = false
         setSourceMode(false)
       }
@@ -281,7 +302,7 @@ export default function App(): React.JSX.Element {
         ctx.get(editorViewCtx).setProps({ editable: () => !value })
       })
     },
-    [sourceMode]
+    [syncVisualEditor]
   )
 
   // Resolve relative local resources through the main process's constrained
@@ -312,12 +333,48 @@ export default function App(): React.JSX.Element {
 
   const getActiveContent = useCallback((): string => {
     if (sourceModeRef.current) return markdownRef.current
-    return editorRef.current?.action(getMarkdown()) ?? markdownRef.current
+    return editorRef.current?.action((ctx) => {
+      const doc = ctx.get(editorViewCtx).state.doc
+      const snapshot = visualSourceRef.current
+      if (doc === snapshot.doc) return snapshot.content
+
+      const serialize = ctx.get(serializerCtx)
+      const parse = ctx.get(parserCtx)
+      const edited = serialize(doc)
+      let expected: string | undefined
+      const content = preserveMarkdownSource(snapshot.source, snapshot.baseline, edited, (candidate) => {
+        try {
+          expected ??= serialize(parse(normalizeDisplayMath(edited)))
+          return serialize(parse(normalizeDisplayMath(candidate))) === expected
+        } catch {
+          return false
+        }
+      })
+      snapshot.doc = doc
+      snapshot.content = content
+      return content
+    }) ?? markdownRef.current
   }, [])
 
   const hasUnsavedChanges = useCallback((): boolean => {
-    return normalizeMarkdown(getActiveContent()) !== normalizeMarkdown(cleanContentRef.current ?? '')
+    return getActiveContent() !== cleanContentRef.current
   }, [getActiveContent])
+
+  const updateEditedContent = useCallback((content: string) => {
+    updateMarkdown(content)
+    setDirty(content !== cleanContentRef.current)
+  }, [updateMarkdown])
+
+  const updateTextareaContent = useCallback((value: string) => {
+    const source = markdownRef.current
+    const content = preserveMarkdownSource(
+      source,
+      normalizeTextareaLineEndings(source),
+      value,
+      (candidate) => normalizeTextareaLineEndings(candidate) === value
+    )
+    updateEditedContent(content)
+  }, [updateEditedContent])
 
   const clearRecoveryDraft = useCallback(async (): Promise<void> => {
     try {
@@ -359,7 +416,7 @@ export default function App(): React.JSX.Element {
       await window.api.saveRecoveryDraft({
         filePath: filePathRef.current,
         content: getActiveContent(),
-        cleanContent: cleanContentRef.current ?? '',
+        cleanContent: cleanContentRef.current,
         fileVersion: fileVersionRef.current,
         sourceMode: sourceModeRef.current,
         updatedAt: Date.now()
@@ -390,31 +447,12 @@ export default function App(): React.JSX.Element {
 
   const handleEditorReady = useCallback((editor: Editor) => {
     editorRef.current = editor
-    // The editor mounts lazily: if a document was opened before it was ready,
-    // apply the pending content now so the opened file actually displays.
-    if (pendingContentRef.current !== null) {
-      editor.action(replaceAll(pendingContentRef.current))
-      pendingContentRef.current = null
-      // Re-baseline from the editor's canonical serialization (the Milkdown
-      // serializer normalizes e.g. `-` bullets to `*`), so later listener
-      // echoes compare equal and the document does not open as "dirty".
-      if (restoringDraftRef.current) {
-        restoringDraftRef.current = false
-      } else {
-        cleanContentRef.current = normalizeMarkdown(editor.action(getMarkdown()) ?? '')
-      }
-    }
-  }, [])
+    syncVisualEditor(pendingContentRef.current ?? markdownRef.current)
+  }, [syncVisualEditor])
 
-  const handleChange = useCallback((md: string) => {
-    markdownRef.current = md
-    setMarkdown(md)
-    // Content-based dirty state: CRLF/LF serialization differences must not
-    // count as edits, while trailing blank-line changes still do.
-    const clean = normalizeMarkdown(cleanContentRef.current ?? '')
-    const nextDirty = normalizeMarkdown(md) !== clean
-    setDirty(nextDirty)
-  }, [])
+  const handleChange = useCallback(() => {
+    if (!sourceModeRef.current) updateEditedContent(getActiveContent())
+  }, [getActiveContent, updateEditedContent])
 
   const handleOutline = useCallback((items: OutlineItem[]) => {
     setOutline(items)
@@ -435,7 +473,6 @@ export default function App(): React.JSX.Element {
     async (saveAs = false): Promise<SaveOutcome> => {
       const content = getActiveContent()
       const currentPath = filePathRef.current
-      const canonical = normalizeMarkdown(content)
 
       try {
         if (!currentPath || saveAs) {
@@ -455,7 +492,7 @@ export default function App(): React.JSX.Element {
           setFilePath(savedPath)
           filePathRef.current = savedPath
           fileVersionRef.current = result.version ?? null
-          cleanContentRef.current = canonical
+          cleanContentRef.current = content
 
           if (isNewPath) {
             addToOpenFiles(savedPath)
@@ -484,13 +521,13 @@ export default function App(): React.JSX.Element {
             return 'failed'
           }
           fileVersionRef.current = result.version ?? null
-          cleanContentRef.current = canonical
+          cleanContentRef.current = content
         }
 
         // An edit may have arrived while the asynchronous disk write was in
         // progress. Only report clean when the current buffer still equals the
         // exact content that was persisted.
-        const stillCurrent = normalizeMarkdown(getActiveContent()) === canonical
+        const stillCurrent = getActiveContent() === content
         setDirty(!stillCurrent)
         if (stillCurrent) await clearRecoveryDraft()
         ignoredExternalVersionRef.current = null
@@ -556,26 +593,13 @@ export default function App(): React.JSX.Element {
       fileVersionRef.current = version
       ignoredExternalVersionRef.current = null
       await updateDocumentBase(path)
-      setMarkdown(content)
-      markdownRef.current = content
+      cleanContentRef.current = content
+      setDocumentContent(content)
       setDirty(false)
       addToOpenFiles(path)
-      cleanContentRef.current = content
-      pendingContentRef.current = content
-      const editor = editorRef.current
-      if (editor) {
-        editor.action(replaceAll(content))
-        pendingContentRef.current = null
-        // Baseline against the editor's canonical serialization so the
-        // debounced listener echo (which may normalize list markers etc.)
-        // never marks a freshly opened file as dirty.
-        cleanContentRef.current = sourceModeRef.current
-          ? normalizeMarkdown(content)
-          : normalizeMarkdown(editor.action(getMarkdown()) ?? content)
-      }
       focusEditor()
     },
-    [addToOpenFiles, focusEditor, updateDocumentBase]
+    [addToOpenFiles, focusEditor, setDocumentContent, updateDocumentBase]
   )
 
   const openFile = useCallback(async () => {
@@ -754,20 +778,12 @@ export default function App(): React.JSX.Element {
         setFilePath(null)
         filePathRef.current = null
         fileVersionRef.current = null
-        setMarkdown('')
-        markdownRef.current = ''
         setDirty(false)
         cleanContentRef.current = ''
-        pendingContentRef.current = ''
-        const editor = editorRef.current
-        if (editor) {
-          editor.action(replaceAll(''))
-          cleanContentRef.current = normalizeMarkdown(editor.action(getMarkdown()) ?? '')
-          pendingContentRef.current = null
-        }
+        setDocumentContent('')
       }
     },
-    [confirmBeforeReplace]
+    [confirmBeforeReplace, setDocumentContent]
   )
 
   const newDocument = useCallback(async () => {
@@ -775,19 +791,11 @@ export default function App(): React.JSX.Element {
     setFilePath(null)
     filePathRef.current = null
     fileVersionRef.current = null
-    setMarkdown('')
-    markdownRef.current = ''
     setDirty(false)
     cleanContentRef.current = ''
-    pendingContentRef.current = ''
-    const editor = editorRef.current
-    if (editor) {
-      editor.action(replaceAll(''))
-      cleanContentRef.current = normalizeMarkdown(editor.action(getMarkdown()) ?? '')
-      pendingContentRef.current = null
-    }
+    setDocumentContent('')
     focusEditor()
-  }, [confirmBeforeReplace, focusEditor])
+  }, [confirmBeforeReplace, focusEditor, setDocumentContent])
 
   // File → Open Welcome Page: show the welcome document as an untitled page.
   const showWelcome = useCallback(async () => {
@@ -796,24 +804,16 @@ export default function App(): React.JSX.Element {
     setFilePath(null)
     filePathRef.current = null
     fileVersionRef.current = null
-    setMarkdown(welcome)
-    markdownRef.current = welcome
     setDirty(false)
     cleanContentRef.current = welcome
-    pendingContentRef.current = welcome
-    const editor = editorRef.current
-    if (editor) {
-      editor.action(replaceAll(welcome))
-      pendingContentRef.current = null
-      cleanContentRef.current = normalizeMarkdown(editor.action(getMarkdown()) ?? welcome)
-    }
+    setDocumentContent(welcome)
     focusEditor()
-  }, [confirmBeforeReplace, lang, focusEditor])
+  }, [confirmBeforeReplace, focusEditor, lang, setDocumentContent])
 
   const buildDocumentHtml = useCallback(() => {
     const body = editorRef.current?.action(ctx => {
       if (!sourceModeRef.current) return getHTML()(ctx)
-      const doc = ctx.get(parserCtx)(normalizeMarkdown(markdownRef.current))
+      const doc = ctx.get(parserCtx)(normalizeDisplayMath(markdownRef.current))
       const container = document.createElement('div')
       container.append(DOMSerializer.fromSchema(doc.type.schema).serializeFragment(doc.content))
       return container.innerHTML
@@ -855,8 +855,7 @@ export default function App(): React.JSX.Element {
       buildDocumentHtml
   }, [buildDocumentHtml])
 
-  // Debug/self-test hook: current editor markdown (mirrors the dirty baseline
-  // used by the dirty tracking).
+  // Debug/self-test hook: current Milkdown serialization.
   useEffect(() => {
     ;(window as unknown as { __inkmarkGetMarkdown?: () => string | null }).__inkmarkGetMarkdown = () =>
       editorRef.current?.action(getMarkdown()) ?? null
@@ -893,22 +892,13 @@ export default function App(): React.JSX.Element {
   }, [])
 
   const toggleSourceMode = useCallback(() => {
-    setSourceMode((prev) => {
-      const next = !prev
-      if (next) {
-        // Entering source mode must snapshot the editor synchronously. The
-        // listener mirrors changes with a debounce and may still be stale.
-        const current = editorRef.current?.action(getMarkdown()) ?? markdownRef.current
-        markdownRef.current = current
-        setMarkdown(current)
-      } else {
-        // When leaving source mode, sync the textarea content into the editor.
-        editorRef.current?.action(replaceAll(markdownRef.current))
-      }
-      sourceModeRef.current = next
-      return next
-    })
-  }, [])
+    const next = !sourceModeRef.current
+    // Snapshot pending visual edits synchronously before switching views.
+    if (next) updateEditedContent(getActiveContent())
+    else syncVisualEditor(markdownRef.current)
+    sourceModeRef.current = next
+    setSourceMode(next)
+  }, [getActiveContent, syncVisualEditor, updateEditedContent])
 
   const getFocusedEditorSelection = useCallback((): string | null => {
     if (sourceModeRef.current) {
@@ -1335,16 +1325,11 @@ export default function App(): React.JSX.Element {
           <FindBar
             getEditor={getEditor}
             sourceMode={sourceMode}
-            sourceText={markdown}
+            sourceText={normalizeTextareaLineEndings(markdown)}
             textareaRef={textareaRef}
             replaceOpen={!readOnly && replaceOpen}
             onToggleReplace={readOnly ? undefined : () => setReplaceOpen((v) => !v)}
-            onSourceReplace={(text) => {
-              markdownRef.current = text
-              setMarkdown(text)
-              const nextDirty = normalizeMarkdown(text) !== normalizeMarkdown(cleanContentRef.current ?? '')
-              setDirty(nextDirty)
-            }}
+            onSourceReplace={updateTextareaContent}
             queryRequest={findQueryRequest}
             onClose={() => {
               setFindOpen(false)
@@ -1383,13 +1368,7 @@ export default function App(): React.JSX.Element {
               className="source-editor"
               value={markdown}
               readOnly={readOnly}
-              onChange={(event) => {
-                const value = event.target.value
-                markdownRef.current = value
-                setMarkdown(value)
-                const nextDirty = normalizeMarkdown(value) !== normalizeMarkdown(cleanContentRef.current ?? '')
-                setDirty(nextDirty)
-              }}
+              onChange={(event) => updateTextareaContent(event.target.value)}
               spellCheck={false}
               autoFocus
             />
