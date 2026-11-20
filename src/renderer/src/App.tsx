@@ -1260,8 +1260,7 @@ export default function App(): React.JSX.Element {
     (event: React.MouseEvent) => {
       const target = event.target as HTMLElement | null
       const imageView = target?.closest('.inkmark-image-view')
-      if (imageView && (target?.closest('.inkmark-image-zoom') ||
-          (target instanceof HTMLImageElement && !target.closest('a')))) {
+      if (imageView && target?.closest('.inkmark-image-zoom')) {
         const image = imageView.querySelector('img')
         if (image?.naturalWidth && !image.hidden) {
           event.preventDefault()

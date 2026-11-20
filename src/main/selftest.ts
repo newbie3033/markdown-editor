@@ -572,10 +572,17 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     })()`)) as boolean
     check('custom-protocol image renders', rendered === true)
 
-    const zoomedImage = await js(`(async () => {
-      const markdown = window.__inkmarkGetMarkdown()
+    const imageSelected = await js(`(async () => {
       const img = document.querySelector('.inkmark-image-view img:not([hidden])')
       img.click()
+      await new Promise(requestAnimationFrame)
+      return !!img.closest('.inkmark-image-view.ProseMirror-selectednode') && !document.querySelector('.image-preview')
+    })()`)
+    check('clicking an image selects its node without opening preview', imageSelected === true)
+
+    const zoomedImage = await js(`(async () => {
+      const markdown = window.__inkmarkGetMarkdown()
+      document.querySelector('.inkmark-image-zoom:not([hidden])')?.click()
       await new Promise(requestAnimationFrame)
       const modal = document.querySelector('dialog.image-preview[open]')
       if (!modal) return false
@@ -591,6 +598,60 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       return !document.querySelector('.image-preview') && window.__inkmarkGetMarkdown() === markdown
     })()`)
     check('image preview zooms in and out without changing Markdown', zoomedImage === true)
+
+    const mousePreviewDoc = join(TEST_DIR, 'docs', 'mouse-preview.md')
+    await fs.writeFile(join(TEST_DIR, 'docs', 'mouse-preview.svg'),
+      '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200"><rect width="1600" height="1200" fill="navy"/></svg>')
+    await fs.writeFile(mousePreviewDoc, '![Large preview](mouse-preview.svg)\n')
+    win.webContents.send(IPC.openPath, mousePreviewDoc)
+    const mouseZoom = (await js(`(async () => {
+      let image
+      for (let i = 0; i < 40; i++) {
+        image = document.querySelector('.inkmark-image-view img[alt="Large preview"]')
+        if (image?.naturalWidth) break
+        await new Promise(resolve => setTimeout(resolve, 50))
+      }
+      if (!image?.naturalWidth) return null
+      image.parentElement.querySelector('.inkmark-image-zoom')?.click()
+      await new Promise(requestAnimationFrame)
+      const area = document.querySelector('.image-preview-viewport')
+      const preview = area.querySelector('img')
+      const before = preview.getBoundingClientRect()
+      const x = Math.round(before.left + before.width * 0.55)
+      const y = Math.round(before.top + before.height * 0.55)
+      const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: x, clientY: y, deltaY: -250 })
+      preview.dispatchEvent(wheel)
+      await new Promise(requestAnimationFrame)
+      const after = preview.getBoundingClientRect()
+      const anchored = Math.abs(after.left + (x - before.left) * after.width / before.width - x) <= 2 &&
+        Math.abs(after.top + (y - before.top) * after.height / before.height - y) <= 2
+      return { x, y, left: area.scrollLeft, top: area.scrollTop, width: after.width,
+        zoomed: after.width > before.width, anchored, prevented: wheel.defaultPrevented }
+    })()`)) as { x: number; y: number; left: number; top: number; width: number; zoomed: boolean; anchored: boolean; prevented: boolean } | null
+    check('image preview wheel zoom keeps the point under the mouse',
+      mouseZoom?.zoomed === true && mouseZoom.anchored && mouseZoom.prevented, JSON.stringify(mouseZoom))
+
+    if (mouseZoom) {
+      const { x, y, left, top, width } = mouseZoom
+      const mouse = { x, y, button: 'left', clickCount: 1 } as const
+      await js(`window.focus()`)
+      win.webContents.sendInputEvent({ type: 'mouseDown', ...mouse })
+      win.webContents.sendInputEvent({ type: 'mouseMove', ...mouse, x: x - 70, y: y - 55 })
+      await sleep(100)
+      const dragActive = await js(`document.querySelector('.image-preview-viewport').hasAttribute('data-panning')`)
+      win.webContents.sendInputEvent({ type: 'mouseUp', ...mouse, x: x - 70, y: y - 55 })
+      await sleep(100)
+      const mousePan = await js(`(() => {
+        const area = document.querySelector('.image-preview-viewport')
+        const preview = area.querySelector('img')
+        const moved = area.scrollLeft >= ${left + 65} && area.scrollTop >= ${top + 50}
+        return moved && preview.getBoundingClientRect().width === ${width} && !area.hasAttribute('data-panning')
+      })()`)
+      check('image preview pans with the mouse and releases on mouseup', dragActive === true && mousePan === true)
+    } else {
+      check('image preview pans with the mouse and releases on mouseup', false)
+    }
+    await js(`document.querySelector('.image-preview-controls button:last-child')?.click()`)
 
     win.webContents.send(IPC.openPath, specialDocPath)
     await sleep(1400)

@@ -1837,8 +1837,8 @@ li.ProseMirror-selectednode::after {
   vertical-align: middle;
 }
 
-.inkmark-image-view > img { cursor: zoom-in; }
-a .inkmark-image-view > img { cursor: pointer; }
+.inkmark-image-view > img { cursor: default; }
+.ProseMirror[contenteditable='false'] a .inkmark-image-view > img { cursor: pointer; }
 .inkmark-image-zoom {
   position: absolute;
   inset: 4px 4px auto auto;
@@ -1852,6 +1852,7 @@ a .inkmark-image-view > img { cursor: pointer; }
   pointer-events: none;
 }
 .inkmark-image-view:hover .inkmark-image-zoom,
+.inkmark-image-view.ProseMirror-selectednode .inkmark-image-zoom,
 .inkmark-image-zoom:focus-visible {
   opacity: 1;
   pointer-events: auto;
@@ -1903,7 +1904,12 @@ a .inkmark-image-view > img { cursor: pointer; }
   align-self: flex-start;
   margin: auto;
   height: auto;
+  user-select: none;
+  touch-action: none;
 }
+.image-preview-viewport[data-pannable] img { cursor: grab; }
+.image-preview-viewport[data-panning],
+.image-preview-viewport[data-panning] img { cursor: grabbing; }
 
 .inkmark-remote-image {
   display: inline-flex;

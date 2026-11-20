@@ -1,5 +1,6 @@
 import type { Node as ProseNode } from '@milkdown/prose/model'
-import { Plugin, PluginKey } from '@milkdown/prose/state'
+import { NodeSelection, Plugin, PluginKey } from '@milkdown/prose/state'
+import type { EditorView } from '@milkdown/prose/view'
 import { $prose } from '@milkdown/utils'
 import { tStatic } from './i18n'
 
@@ -61,11 +62,24 @@ class ImageView {
   private loadedRemoteSource = ''
   private requestId = 0
 
-  constructor(node: ProseNode) {
+  constructor(node: ProseNode, view: EditorView, getPos: () => number | undefined) {
     this.dom = document.createElement('span')
     this.dom.className = 'inkmark-image-view'
     this.image = document.createElement('img')
     this.image.draggable = false
+    this.image.addEventListener('click', (event) => {
+      if (!view.editable || event.button !== 0) return
+      if ((event.ctrlKey || event.metaKey) && this.image.closest('a[href]')) return
+      const pos = getPos()
+      if (pos === undefined) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      const { state } = view
+      const selection = NodeSelection.create(state.doc, pos)
+      if (!selection.eq(state.selection)) view.dispatch(state.tr.setSelection(selection))
+      view.focus()
+    })
 
     const zoom = document.createElement('button')
     zoom.type = 'button'
@@ -211,7 +225,7 @@ export const localImageViewPlugin = $prose(
       key: new PluginKey('INKMARK_LOCAL_IMAGE_VIEW'),
       props: {
         nodeViews: {
-          image: (node: ProseNode) => new ImageView(node)
+          image: (node, view, getPos) => new ImageView(node, view, getPos)
         }
       }
     })
