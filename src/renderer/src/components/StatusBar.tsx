@@ -4,6 +4,28 @@ import type { DocStats } from '../lib/markdown'
 import { useI18n } from '../lib/i18n'
 import { StatusBarMenu, type StatusBarMenuItem } from './StatusBarMenu'
 
+const chineseNumbers = new Intl.NumberFormat('zh-CN')
+const englishNumbers = new Intl.NumberFormat('en-US')
+
+const iconPaths = {
+  files: 'M3 6h7l2 2h9v11H3z',
+  outline: 'M3 5h17M6 10h14M6 15h14M3 20h17',
+  locked: 'M6 10h12v11H6z M8 10V7a4 4 0 0 1 8 0v3',
+  edit: 'm4 16 11-11 4 4L8 20l-5 1z M13 7l4 4',
+  source: 'm7 7-5 5 5 5m10-10 5 5-5 5m-4-13-3 20',
+  moon: 'M20 15A8 8 0 0 1 9 4a8.5 8.5 0 1 0 11 11z',
+  sun: 'M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0z M12 2v2m0 16v2M2 12h2m16 0h2M5 5l2 2m10 10 2 2M5 19l2-2M17 7l2-2'
+}
+
+function StatusIcon({ name }: { name: keyof typeof iconPaths }): React.JSX.Element {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={iconPaths[name]} />
+    </svg>
+  )
+}
+
 type StatusBarItemId =
   | 'sidebar'
   | 'outline'
@@ -118,6 +140,7 @@ export function StatusBar({
   onZoomReset
 }: StatusBarProps): React.JSX.Element {
   const { t } = useI18n()
+  const numberFormat = lang === 'zh' ? chineseNumbers : englishNumbers
   const zoomPercent = Math.round(Math.pow(1.2, zoomLevel) * 100)
   const [visible, setVisible] = useState<Record<StatusBarItemId, boolean>>(loadVisibility)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
@@ -177,18 +200,20 @@ export function StatusBar({
           <button
             className={`status-item status-btn toggle-sidebar-btn${showSidebar ? ' active' : ''}`}
             onClick={onToggleSidebar}
+            aria-pressed={showSidebar}
             title={t('status.toggleSidebar')}
           >
-            📁
+            <StatusIcon name="files" />
           </button>
         )}
         {visible.outline && (
           <button
             className={`status-item status-btn toggle-outline-btn${showOutline ? ' active' : ''}`}
             onClick={onToggleOutline}
+            aria-pressed={showOutline}
             title={t('status.toggleOutline')}
           >
-            ☰
+            <StatusIcon name="outline" />
           </button>
         )}
         {visible.dirty && <span className="status-item dirty-indicator">{dirty ? '●' : '○'}</span>}
@@ -205,23 +230,25 @@ export function StatusBar({
       <div className="statusbar-right">
         <button
           className={`status-item status-btn toggle-readonly-btn${readOnly ? ' active' : ''}`}
+          aria-pressed={readOnly}
           onClick={onToggleReadOnly}
           title={readOnly ? t('status.editMode') : t('status.readOnly')}
         >
-          {readOnly ? '🔒' : '✏️'}
+          <StatusIcon name={readOnly ? 'locked' : 'edit'} />
         </button>
         {visible.source && (
           <button
             className={`status-item status-btn${sourceMode ? ' active' : ''}`}
             onClick={onToggleSource}
+            aria-pressed={sourceMode}
             title={t('status.sourceMode')}
           >
-            {'</>'}
+            <StatusIcon name="source" />
           </button>
         )}
         {visible.theme && (
           <button className="status-item status-btn" onClick={onToggleTheme} title={t('status.theme')}>
-            {theme === 'light' ? '🌙' : '☀️'}
+            <StatusIcon name={theme === 'light' ? 'moon' : 'sun'} />
           </button>
         )}
         {visible.lang && (
@@ -238,24 +265,20 @@ export function StatusBar({
               {zoomPercent}%
             </button>
             <button className="status-btn zoom-in" onClick={onZoomIn} title={t('status.zoomIn')}>
-              ＋
+              +
             </button>
           </span>
         )}
-        {visible.words && (
-          <span className="status-item">
-            {stats.words} {t('status.words')}
-          </span>
-        )}
-        {visible.chars && (
-          <span className="status-item">
-            {stats.characters} {t('status.chars')}
-          </span>
-        )}
-        {visible.lines && (
-          <span className="status-item">
-            {stats.lines} {t('status.lines')}
-          </span>
+        {(visible.words || visible.chars || visible.lines) && (
+          <div className="status-counts">
+            {visible.words && <span><b>{numberFormat.format(stats.words)}</b> {t('status.words')}</span>}
+            {visible.chars && (
+              <span title={t('status.characterHint')}>
+                <b>{numberFormat.format(stats.characters)}</b> {t('status.chars')}
+              </span>
+            )}
+            {visible.lines && <span><b>{numberFormat.format(stats.lines)}</b> {t('status.lines')}</span>}
+          </div>
         )}
       </div>
       {toast && <div className={`status-toast ${toast.kind}`}>{toast.text}</div>}

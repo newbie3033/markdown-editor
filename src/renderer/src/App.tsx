@@ -1,11 +1,13 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { editorViewCtx, type Editor } from '@milkdown/kit/core'
+import { editorViewCtx, parserCtx, type Editor } from '@milkdown/kit/core'
+import { DOMSerializer } from '@milkdown/prose/model'
 import { AllSelection } from '@milkdown/prose/state'
 import { getMarkdown, getHTML, replaceAll as replaceAllRaw } from '@milkdown/kit/utils'
 import type { FileVersion, MenuAction, SearchFlags } from '../../shared/ipc'
 const MarkdownEditor = lazy(() =>
   import('./components/MarkdownEditor').then((module) => ({ default: module.MarkdownEditor }))
 )
+import { ImagePreview, type PreviewImage } from './components/ImagePreview'
 import { Sidebar, type SidebarTab, type FolderState } from './components/Sidebar'
 import { OutlinePanel } from './components/OutlinePanel'
 import { StatusBar } from './components/StatusBar'
@@ -72,6 +74,8 @@ export default function App(): React.JSX.Element {
   } | null>(null)
   const [zoomLevel, setZoomLevel] = useState(0)
   const [recoveryReady, setRecoveryReady] = useState(false)
+  const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null)
+  useEffect(() => setPreviewImage(null), [filePath, sourceMode])
   const [storageOpen, setStorageOpen] = useState(false)
   const zoomRef = useRef(0)
   const leftSidebar = useResizableWidth('inkmark.sidebarWidth')
@@ -191,6 +195,7 @@ export default function App(): React.JSX.Element {
 
   // Persist theme + window title + editor placeholder text.
   useEffect(() => {
+    void window.api.setTheme(theme)
     document.documentElement.setAttribute('data-theme', theme)
     document.title = `${dirty ? '● ' : ''}${title}${readOnly ? t('status.readOnlySuffix') : ''} — InkMark`
     document.documentElement.style.setProperty('--editor-placeholder', `"${t('editor.placeholder')}"`)
@@ -771,13 +776,20 @@ export default function App(): React.JSX.Element {
   }, [confirmBeforeReplace, lang, focusEditor])
 
   const buildDocumentHtml = useCallback(() => {
-    const body = editorRef.current?.action(getHTML()) ?? ''
+    const body = editorRef.current?.action(ctx => {
+      if (!sourceModeRef.current) return getHTML()(ctx)
+      const doc = ctx.get(parserCtx)(normalizeMarkdown(markdownRef.current))
+      const container = document.createElement('div')
+      container.append(DOMSerializer.fromSchema(doc.type.schema).serializeFragment(doc.content))
+      return container.innerHTML
+    }) ?? ''
     return buildHtmlDocument(body, title)
   }, [title])
 
   const exportHtml = useCallback(async () => {
     try {
-      await window.api.exportHtml(title, buildDocumentHtml(), filePathRef.current)
+      const path = filePathRef.current
+      await window.api.exportHtml(title, await buildDocumentHtml(), path)
     } catch (error) {
       await reportSaveError(t('error.exportFailed'), error)
     }
@@ -785,7 +797,8 @@ export default function App(): React.JSX.Element {
 
   const exportPdf = useCallback(async () => {
     try {
-      await window.api.exportPdf(title, buildDocumentHtml(), filePathRef.current)
+      const path = filePathRef.current
+      await window.api.exportPdf(title, await buildDocumentHtml(), path)
     } catch (error) {
       await reportSaveError(t('error.exportFailed'), error)
     }
@@ -793,7 +806,8 @@ export default function App(): React.JSX.Element {
 
   const print = useCallback(async () => {
     try {
-      await window.api.exportPrint(buildDocumentHtml(), filePathRef.current)
+      const path = filePathRef.current
+      await window.api.exportPrint(await buildDocumentHtml(), path)
     } catch (error) {
       await reportSaveError(t('error.exportFailed'), error)
     }
@@ -802,7 +816,7 @@ export default function App(): React.JSX.Element {
   // Debug/self-test hook: expose the export-HTML builder to the headless
   // self-test so the PDF/HTML export path can be verified end to end.
   useEffect(() => {
-    ;(window as unknown as { __inkmarkBuildExportHtml?: () => string }).__inkmarkBuildExportHtml =
+    ;(window as unknown as { __inkmarkBuildExportHtml?: () => Promise<string> }).__inkmarkBuildExportHtml =
       buildDocumentHtml
   }, [buildDocumentHtml])
 
@@ -1166,6 +1180,21 @@ export default function App(): React.JSX.Element {
   const onEditorClick = useCallback(
     (event: React.MouseEvent) => {
       const target = event.target as HTMLElement | null
+      const imageView = target?.closest('.inkmark-image-view')
+      if (imageView && (target?.closest('.inkmark-image-zoom') ||
+          (target instanceof HTMLImageElement && !target.closest('a')))) {
+        const image = imageView.querySelector('img')
+        if (image?.naturalWidth && !image.hidden) {
+          event.preventDefault()
+          setPreviewImage({
+            src: image.currentSrc || image.src,
+            alt: image.alt,
+            width: image.naturalWidth,
+            height: image.naturalHeight
+          })
+          return
+        }
+      }
       const taskItem = target?.closest?.('li[data-item-type="task"]') as HTMLLIElement | null
       if (taskItem && !readOnlyRef.current && !sourceModeRef.current) {
         const box = getComputedStyle(taskItem, '::before')
@@ -1286,27 +1315,6 @@ export default function App(): React.JSX.Element {
             />
           )}
         </div>
-        <StatusBar
-          stats={stats}
-          filePath={filePath}
-          dirty={dirty}
-          sourceMode={sourceMode}
-          theme={theme}
-          lang={lang}
-          zoomLevel={zoomLevel}
-          readOnly={readOnly}
-          showSidebar={showSidebar}
-          showOutline={showOutline}
-          onToggleSidebar={() => setShowSidebar((v) => !v)}
-          onToggleOutline={() => setShowOutline((v) => !v)}
-          onToggleReadOnly={() => setReadOnlyMode(!readOnly)}
-          onToggleSource={toggleSourceMode}
-          onToggleTheme={() => setTheme((th) => (th === 'light' ? 'dark' : 'light'))}
-          onToggleLang={() => setLang(lang === 'zh' ? 'en' : 'zh')}
-          onZoomIn={() => applyZoom(zoomRef.current + 0.5)}
-          onZoomOut={() => applyZoom(zoomRef.current - 0.5)}
-          onZoomReset={() => applyZoom(0)}
-        />
       </main>
 
       {showOutline && (
@@ -1319,6 +1327,28 @@ export default function App(): React.JSX.Element {
         />
       )}
 
+      <StatusBar
+        stats={stats}
+        filePath={filePath}
+        dirty={dirty}
+        sourceMode={sourceMode}
+        theme={theme}
+        lang={lang}
+        zoomLevel={zoomLevel}
+        readOnly={readOnly}
+        showSidebar={showSidebar}
+        showOutline={showOutline}
+        onToggleSidebar={() => setShowSidebar((v) => !v)}
+        onToggleOutline={() => setShowOutline((v) => !v)}
+        onToggleReadOnly={() => setReadOnlyMode(!readOnly)}
+        onToggleSource={toggleSourceMode}
+        onToggleTheme={() => setTheme((th) => (th === 'light' ? 'dark' : 'light'))}
+        onToggleLang={() => setLang(lang === 'zh' ? 'en' : 'zh')}
+        onZoomIn={() => applyZoom(zoomRef.current + 0.5)}
+        onZoomOut={() => applyZoom(zoomRef.current - 0.5)}
+        onZoomReset={() => applyZoom(0)}
+      />
+      {previewImage && <ImagePreview image={previewImage} onClose={() => setPreviewImage(null)} />}
         {ctxMenu && (
           <EditorContextMenu
             x={ctxMenu.x}

@@ -2,8 +2,8 @@ import type { Node as ProseNode } from '@milkdown/prose/model'
 import { Plugin, PluginKey } from '@milkdown/prose/state'
 import type { ViewMutationRecord } from '@milkdown/prose/view'
 import { $prose } from '@milkdown/utils'
-import mermaid from 'mermaid'
 import { tStatic } from './i18n'
+import { diagramPng } from './diagramPng'
 import { renderMath } from './math'
 
 export const TOGGLE_PREVIEW_SOURCE_EVENT = 'inkmark-toggle-preview-source'
@@ -36,25 +36,56 @@ const MERMAID_LANGUAGES = new Set([
 ])
 
 let mermaidRenderId = 0
-const renderedDiagramCache = new Map<string, string>()
+type DiagramTheme = 'light' | 'dark'
+let configuredTheme: DiagramTheme | undefined
+let renderQueue = Promise.resolve()
 
-function diagramCacheKey(language: string, content: string): string {
-  return `${language.trim().toLowerCase()}\u0000${content}`
-}
-
-export function getRenderedDiagramSvg(language: string, content: string): string | null {
-  return renderedDiagramCache.get(diagramCacheKey(language, content)) ?? null
-}
-
-function rememberRenderedDiagram(language: string, content: string, svg: string): void {
-  const key = diagramCacheKey(language, content)
-  renderedDiagramCache.delete(key)
-  renderedDiagramCache.set(key, svg)
-  while (renderedDiagramCache.size > 64) {
-    const oldest = renderedDiagramCache.keys().next().value
-    if (!oldest) break
-    renderedDiagramCache.delete(oldest)
-  }
+// Mermaid configuration is global. Keep each theme change and its render
+// together so a light export can run while a dark editor preview is pending.
+export function renderDiagram(language: string, content: string, theme: DiagramTheme) {
+  const render = renderQueue.then(async () => {
+    const { default: mermaid } = await import('mermaid')
+    if (configuredTheme !== theme) {
+      const dark = theme === 'dark'
+      const ink = dark ? '#acd6ff' : '#174c78'
+      const outline = dark ? '#345575' : '#bdd4e8'
+      const paper = dark ? '#0d1117' : '#ffffff'
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        suppressErrorRendering: true,
+        theme: 'base',
+        htmlLabels: false,
+        themeCSS: `
+          .node rect.label-container { rx: 12px; ry: 12px; }
+          .node polygon.label-container { fill: ${dark ? '#14273a' : '#f4f9ff'}; }
+          .node .label text, .node .label tspan[font-weight="normal"],
+          .edgeLabel tspan[font-weight="normal"] { font-weight: 600; }
+          .edgeLabel text { paint-order: stroke; stroke: ${paper}; stroke-width: 4px; stroke-linejoin: round; }
+          .edgeLabel .label rect { rx: 8px; ry: 8px; }
+        `,
+        themeVariables: {
+          darkMode: dark, background: paper,
+          fontFamily: 'system-ui, sans-serif', fontSize: '14px',
+          primaryColor: dark ? '#102e49' : '#e6f3ff',
+          secondaryColor: dark ? '#162638' : '#f3f8fc',
+          tertiaryColor: dark ? '#282c42' : '#f3f1fa',
+          primaryTextColor: ink, secondaryTextColor: ink, tertiaryTextColor: ink,
+          textColor: ink, primaryBorderColor: outline,
+          lineColor: dark ? '#7494af' : '#7390a7',
+          edgeLabelBackground: paper,
+          clusterBkg: dark ? '#18232b' : '#f6f9fa',
+          clusterBorder: dark ? '#43525e' : '#c8d4d9',
+          actorTextColor: ink, signalTextColor: ink, signalColor: ink,
+        },
+        flowchart: { htmlLabels: false, curve: 'linear', nodeSpacing: 36, rankSpacing: 48, padding: 12 },
+      })
+      configuredTheme = theme
+    }
+    return mermaid.render(`inkmark-mermaid-${++mermaidRenderId}`, normalizeMermaidSource(language, content))
+  })
+  renderQueue = render.then(() => {}, () => {})
+  return render
 }
 
 export function isMermaidLanguage(language: string): boolean {
@@ -148,6 +179,8 @@ class CodeBlockView {
   readonly contentDOM: HTMLElement
 
   private readonly button: HTMLButtonElement
+  private readonly savePngButton: HTMLButtonElement
+  private savingPng = false
   private readonly source: HTMLPreElement
   private readonly preview: HTMLDivElement
   private node: ProseNode
@@ -155,7 +188,7 @@ class CodeBlockView {
   private previewTimer: ReturnType<typeof setTimeout> | null = null
   private previewGeneration = 0
   private sourceVisible = false
-  private readonly themeObserver: MutationObserver | null
+  private readonly themeObserver: MutationObserver
 
   constructor(node: ProseNode) {
     this.node = node
@@ -181,16 +214,21 @@ class CodeBlockView {
     this.button.setAttribute('contenteditable', 'false')
     this.button.addEventListener('mousedown', (event) => event.preventDefault())
     this.button.addEventListener('click', () => this.copy())
-    this.dom.appendChild(this.button)
+    this.savePngButton = document.createElement('button')
+    this.savePngButton.type = 'button'
+    this.savePngButton.className = 'diagram-png-btn'
+    this.savePngButton.textContent = tStatic('code.savePng')
+    this.savePngButton.hidden = true
+    this.savePngButton.addEventListener('mousedown', event => event.preventDefault())
+    this.savePngButton.addEventListener('click', () => void this.savePng())
+    const tools = document.createElement('div')
+    tools.className = 'code-block-tools'
+    tools.contentEditable = 'false'
+    tools.append(this.button, this.savePngButton)
+    this.dom.prepend(tools)
     this.dom.addEventListener(TOGGLE_PREVIEW_SOURCE_EVENT, this.togglePreviewSource)
 
-    this.themeObserver = typeof MutationObserver === 'undefined' ? null : new MutationObserver(() => {
-      if (isMermaidLanguage(String(this.node.attrs.language ?? ''))) this.renderPreview()
-    })
-    this.themeObserver?.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['data-theme'],
-    })
+    this.themeObserver = new MutationObserver(() => this.renderPreview())
     this.renderPreview()
   }
 
@@ -210,6 +248,22 @@ class CodeBlockView {
     this.dom.dataset.sourceVisible = String(this.sourceVisible)
   }
 
+  private async savePng(): Promise<void> {
+    const svg = this.preview.querySelector('svg')
+    if (!svg || this.savingPng) return
+    this.savingPng = true
+    this.savePngButton.disabled = true
+    try {
+      const png = await diagramPng(svg, getComputedStyle(this.preview).backgroundColor)
+      await window.api.exportDiagramPng(png)
+    } catch (error) {
+      await window.api.showError(tStatic('code.pngFailed'), error instanceof Error ? error.message : String(error))
+    } finally {
+      this.savingPng = false
+      this.savePngButton.disabled = this.savePngButton.hidden
+    }
+  }
+
   private copy(): void {
     void window.api.copyText(this.node.textContent)
     this.button.textContent = tStatic('code.copied')
@@ -225,14 +279,17 @@ class CodeBlockView {
   private renderPreview(): void {
     const language = String(this.node.attrs.language ?? '')
     const content = this.node.textContent
+    this.savePngButton.hidden = true
     const generation = ++this.previewGeneration
     if (this.previewTimer) {
       clearTimeout(this.previewTimer)
       this.previewTimer = null
     }
+    const keepDiagram = isMermaidLanguage(language) && !!this.preview.querySelector('svg')
+    this.themeObserver.disconnect()
     this.preview.hidden = true
     this.preview.className = 'diagram-preview'
-    this.preview.replaceChildren()
+    if (!keepDiagram) this.preview.replaceChildren()
 
     if (isMathLanguage(language) && content.trim()) {
       this.setPreviewKind('math')
@@ -255,7 +312,8 @@ class CodeBlockView {
     this.setPreviewKind('mermaid')
     this.preview.classList.add('mermaid-preview')
     this.preview.hidden = false
-    this.preview.textContent = '正在生成图表…'
+    this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+    if (!keepDiagram) this.preview.textContent = tStatic('code.renderingDiagram')
     this.previewTimer = setTimeout(() => {
       this.previewTimer = null
       void this.renderMermaid(language, content, generation)
@@ -268,33 +326,28 @@ class CodeBlockView {
     generation: number
   ): Promise<void> {
     try {
-      const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default'
-      mermaid.initialize({
-        startOnLoad: false,
-        securityLevel: 'strict',
-        theme,
-        fontFamily: 'inherit',
-      })
-      const id = `inkmark-mermaid-${++mermaidRenderId}`
-      const result = await mermaid.render(id, normalizeMermaidSource(language, content))
+      const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
+      const result = await renderDiagram(language, content, theme)
       if (generation !== this.previewGeneration) return
       this.preview.replaceChildren()
       const svg = document.createElement('div')
       svg.innerHTML = result.svg
       this.preview.appendChild(svg)
-      rememberRenderedDiagram(String(this.node.attrs.language ?? ''), content, result.svg)
+      this.savePngButton.hidden = false
+      this.savePngButton.disabled = this.savingPng
       result.bindFunctions?.(this.preview)
     } catch (error) {
       if (generation !== this.previewGeneration) return
       this.preview.classList.add('diagram-error')
-      this.preview.textContent = `图表语法错误：${error instanceof Error ? error.message : String(error)}`
+      this.preview.textContent = `${tStatic('code.diagramError')}: ${error instanceof Error ? error.message : String(error)}`
     }
   }
 
   update(node: ProseNode): boolean {
     if (node.type.name !== 'code_block') return false
+    const changed = node.attrs.language !== this.node.attrs.language || !node.content.eq(this.node.content)
     this.node = node
-    this.renderPreview()
+    if (changed) this.renderPreview()
     return true
   }
 
@@ -304,14 +357,14 @@ class CodeBlockView {
   }
 
   stopEvent(event: Event): boolean {
-    return this.button.contains(event.target as Node)
+    return this.button.contains(event.target as Node) || this.savePngButton.contains(event.target as Node)
   }
 
   destroy(): void {
     if (this.feedbackTimer) clearTimeout(this.feedbackTimer)
     if (this.previewTimer) clearTimeout(this.previewTimer)
     this.previewGeneration += 1
-    this.themeObserver?.disconnect()
+    this.themeObserver.disconnect()
     this.dom.removeEventListener(TOGGLE_PREVIEW_SOURCE_EVENT, this.togglePreviewSource)
   }
 }

@@ -1,7 +1,7 @@
 // Self-test harness for headless verification.
 // Only runs when INKMARK_SELFTEST=1 is set; results are logged to stderr.
 
-import { app, BrowserWindow, clipboard, dialog, Menu, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, shell } from 'electron'
 import { appendFileSync, existsSync, promises as fs, writeFileSync, writeSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { basename, join } from 'node:path'
@@ -571,6 +571,26 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     })()`)) as boolean
     check('custom-protocol image renders', rendered === true)
 
+    const zoomedImage = await js(`(async () => {
+      const markdown = window.__inkmarkGetMarkdown()
+      const img = document.querySelector('.inkmark-image-view img:not([hidden])')
+      img.click()
+      await new Promise(requestAnimationFrame)
+      const modal = document.querySelector('dialog.image-preview[open]')
+      if (!modal) return false
+      const preview = modal.querySelector('img')
+      const initial = preview.getBoundingClientRect().width
+      for (const [key, compare] of [['+', w => w > initial], ['-', w => w === initial]]) {
+        modal.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
+        await new Promise(requestAnimationFrame)
+        if (!compare(preview.getBoundingClientRect().width)) return false
+      }
+      modal.querySelector('button:last-child').click()
+      await new Promise(requestAnimationFrame)
+      return !document.querySelector('.image-preview') && window.__inkmarkGetMarkdown() === markdown
+    })()`)
+    check('image preview zooms in and out without changing Markdown', zoomedImage === true)
+
     win.webContents.send(IPC.openPath, specialDocPath)
     await sleep(1400)
     const specialPathRender = (await js(`(async () => {
@@ -624,6 +644,13 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       return { heading: document.querySelector('.ProseMirror h1')?.textContent }
     })()`)) as { heading?: string | null }
     check('window-level drop opens md', dropWindow?.heading === 'Dropped Document', String(dropWindow?.heading))
+
+    const unicodePath = join(TEST_DIR, 'docs', 'unicode-counts.md')
+    await fs.writeFile(unicodePath, 'Hi 中 👨‍👩‍👧‍👦 e\u0301\r\n🇨🇳')
+    win.webContents.send(IPC.openPath, unicodePath)
+    await sleep(1000)
+    const characterCount = await js(`document.querySelector('.status-counts span[title] b')?.textContent`)
+    check('character count handles composite emoji, combining marks and CRLF', characterCount === '9', String(characterCount))
 
     // 9b. Code block copy-to-clipboard button.
     await fs.writeFile(
@@ -690,7 +717,9 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
         block: !!document.querySelector('.formula-preview .katex'),
         blockCount: document.querySelectorAll('.formula-preview .katex').length,
         mermaid: !!document.querySelector('.mermaid-preview svg'),
-        mermaidNewline: !!document.querySelector('.mermaid-preview svg br') &&
+        mermaidNewline: Array.from(document.querySelectorAll('.mermaid-preview svg .node text'))
+          .some(label => ['Done', 'Next line'].every(line =>
+            Array.from(label.children).some(span => span.textContent === line))) &&
           !document.querySelector('.mermaid-preview svg')?.textContent?.includes('\\n'),
         formulaTail: Array.from(document.querySelectorAll('.ProseMirror h2'))
           .some(heading => heading.textContent === 'Formula Tail'),
@@ -725,6 +754,36 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
         diagrams.markdown.includes('Done\\nNext line'),
       diagrams?.markdown ?? ''
     )
+    const pngPath = join(TEST_DIR, 'diagram.png')
+    const originalDiagramSaveDialog = dialog.showSaveDialog
+    let cancelPng = false
+    let pngDialogs = 0
+    dialog.showSaveDialog = (async () => {
+      pngDialogs++
+      return { canceled: cancelPng, filePath: cancelPng ? undefined : pngPath }
+    }) as typeof dialog.showSaveDialog
+    try {
+      const saveDiagram = () => js(`(async () => {
+        const button = document.querySelector('.diagram-png-btn:not([hidden])')
+        if (!button || button.disabled) return false
+        button.click()
+        for (let i = 0; button.disabled && i < 100; i++) {
+          await new Promise(resolve => setTimeout(resolve, 50))
+        }
+        return !button.disabled
+      })()`)
+      await saveDiagram()
+      const png = await fs.readFile(pngPath)
+      const size = nativeImage.createFromBuffer(png).getSize()
+      check('diagram toolbar saves a decodable PNG', pngDialogs === 1 &&
+        png.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' && size.width > 100 && size.height > 50)
+      cancelPng = true
+      const ready = await saveDiagram()
+      check('canceling PNG export restores the toolbar', ready === true && pngDialogs === 2)
+    } finally {
+      dialog.showSaveDialog = originalDiagramSaveDialog
+    }
+
     const previewSourceToggle = (await js(`(async () => {
       const preview = document.querySelector('.formula-preview')
       const wrap = preview?.closest('.code-block-wrap')
@@ -1379,12 +1438,12 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       return {
         editable: document.querySelector('.ProseMirror')?.getAttribute('contenteditable'),
         title: document.title,
-        btn: document.querySelector('.toggle-readonly-btn')?.textContent
+        pressed: document.querySelector('.toggle-readonly-btn')?.getAttribute('aria-pressed')
       }
-    })()`)) as { editable?: string | null; title?: string; btn?: string | null }
+    })()`)) as { editable?: string | null; title?: string; pressed?: string | null }
     check(
       'read-only disables editor',
-      ro1?.editable === 'false' && ro1?.btn === '🔒',
+      ro1?.editable === 'false' && ro1?.pressed === 'true',
       JSON.stringify(ro1)
     )
     check('read-only title suffix', (ro1?.title ?? '').includes('只读'), String(ro1?.title))
@@ -1774,8 +1833,8 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       filePath: join(EXPORT_DIR, basename(options?.defaultPath ?? 'document.html'))
     })) as typeof dialog.showSaveDialog
     try {
-      const exportResult = (await js(`(() => {
-        const html = window.__inkmarkBuildExportHtml()
+      const exportResult = (await js(`(async () => {
+        const html = await window.__inkmarkBuildExportHtml()
         const template = document.createElement('template')
         template.innerHTML = html
         const rendered = 'img,video,audio,canvas,svg,math,iframe,object,embed,input,textarea,select,button,br,hr,table,pre,[data-type="math_inline"]'

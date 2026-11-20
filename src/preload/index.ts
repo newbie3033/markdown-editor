@@ -83,6 +83,8 @@ const api: InkMarkApi = {
   listMarkdown: (folderPath: string): Promise<FileEntry[]> =>
     ipcRenderer.invoke(IPC.listMarkdown, folderPath),
 
+  exportDiagramPng: (data: ArrayBuffer): Promise<SaveResult> => ipcRenderer.invoke(IPC.exportDiagramPng, data),
+
   exportHtml: (defaultName: string, html: string, documentPath: string | null): Promise<SaveResult> =>
     ipcRenderer.invoke(IPC.exportHtml, defaultName, html, documentPath),
 
@@ -152,6 +154,7 @@ const api: InkMarkApi = {
 
   getLocale: (): Promise<Lang> => ipcRenderer.invoke(IPC.getLocale),
 
+  setTheme: theme => ipcRenderer.invoke(IPC.setTheme, theme),
   setLocale: (lang: Lang): Promise<void> => ipcRenderer.invoke(IPC.setLocale, lang),
 
   getStorageStats: (): Promise<StorageStats> => ipcRenderer.invoke(IPC.getStorageStats),

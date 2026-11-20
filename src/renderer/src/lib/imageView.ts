@@ -67,6 +67,17 @@ class ImageView {
     this.image = document.createElement('img')
     this.image.draggable = false
 
+    const zoom = document.createElement('button')
+    zoom.type = 'button'
+    zoom.className = 'inkmark-image-zoom'
+    zoom.title = tStatic('image.preview')
+    zoom.setAttribute('aria-label', zoom.title)
+    zoom.textContent = '⤢'
+    zoom.hidden = true
+    this.image.addEventListener('load', () => { zoom.hidden = false })
+    this.image.addEventListener('error', () => { zoom.hidden = true })
+    zoom.addEventListener('mousedown', (event) => event.preventDefault())
+
     this.remotePanel = document.createElement('span')
     this.remotePanel.className = 'inkmark-remote-image'
     this.remoteMessage = document.createElement('span')
@@ -81,7 +92,7 @@ class ImageView {
       void this.loadRemoteImage()
     })
     this.remotePanel.append(this.remoteMessage, this.remoteButton)
-    this.dom.append(this.image, this.remotePanel)
+    this.dom.append(this.image, zoom, this.remotePanel)
     this.updateAttributes(node)
   }
 
@@ -174,6 +185,10 @@ class ImageView {
     if (node.type.name !== 'image') return false
     this.updateAttributes(node)
     return true
+  }
+
+  stopEvent(event: Event): boolean {
+    return event.target instanceof Element && !!event.target.closest('button')
   }
 
   selectNode(): void {

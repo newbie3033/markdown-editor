@@ -240,6 +240,7 @@ export const IPC = {
   confirmExternalChange: 'file:confirm-external-change',
   openFolderDialog: 'folder:open-dialog',
   listMarkdown: 'folder:list-markdown',
+  exportDiagramPng: 'export:diagram-png',
   exportHtml: 'export:html',
   exportPdf: 'export:pdf',
   exportPrint: 'export:print',
@@ -267,6 +268,7 @@ export const IPC = {
   showAbout: 'app:show-about',
   setReadOnly: 'app:set-read-only',
   getLocale: 'app:get-locale',
+  setTheme: 'app:set-theme',
   setLocale: 'app:set-locale',
   getStorageStats: 'storage:stats',
   cleanStorage: 'storage:clean',
@@ -308,6 +310,7 @@ export interface InkMarkApi {
   confirmExternalChange(fileName: string, dirty: boolean): Promise<ExternalChangeChoice>
   openFolderDialog(): Promise<FolderResult>
   listMarkdown(folderPath: string): Promise<FileEntry[]>
+  exportDiagramPng(data: ArrayBuffer): Promise<SaveResult>
   exportHtml(defaultName: string, html: string, documentPath: string | null): Promise<SaveResult>
   exportPdf(defaultName: string, html: string, documentPath: string | null): Promise<SaveResult>
   exportPrint(html: string, documentPath: string | null): Promise<void>
@@ -335,6 +338,7 @@ export interface InkMarkApi {
   clearRecoveryDraft(): Promise<void>
   confirmRecovery(fileName: string, updatedAt: number): Promise<RecoveryChoice>
   getLocale(): Promise<Lang>
+  setTheme(theme: 'light' | 'dark'): Promise<void>
   setLocale(lang: Lang): Promise<void>
   getStorageStats(): Promise<StorageStats>
   cleanStorage(categories: StorageCategoryId[]): Promise<StorageCleanupResult>

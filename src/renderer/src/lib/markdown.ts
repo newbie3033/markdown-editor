@@ -14,28 +14,34 @@ export function headingIdFromText(text: string): string {
   return text.toLowerCase().trim().replace(/\s+/g, '-')
 }
 
-const CJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/
+const cjkCharacter = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu
+const word = /[\p{L}\p{N}][\p{L}\p{N}\p{M}]*(?:['_’-][\p{L}\p{N}][\p{L}\p{N}\p{M}]*)*/gu
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
-/** Rough, Typora-like word count: CJK chars each count as one word. */
+/** Each CJK character counts as one word, alongside words in other scripts. */
 export function countWords(text: string): number {
-  let cjk = 0
-  let latinWords = 0
-  for (const ch of text) {
-    if (CJK.test(ch)) cjk += 1
-  }
-  const withoutCjk = text.replace(new RegExp(CJK, 'g'), ' ')
-  const tokens = withoutCjk.match(/[A-Za-z0-9_'-]+/g)
-  if (tokens) latinWords = tokens.length
-  return cjk + latinWords
+  let words = 0
+  const remaining = text.replace(cjkCharacter, () => {
+    words++
+    return ' '
+  })
+  for (const _ of remaining.matchAll(word)) words++
+  return words
 }
 
 export function computeStats(markdown: string): DocStats {
-  const lines = markdown.length === 0 ? 0 : markdown.split('\n').length
-  return {
-    words: countWords(markdown),
-    characters: markdown.length,
-    lines
+  let characters = 0
+  let lines = 0
+  if (markdown) {
+    for (const line of markdown.split(/\r\n|[\n\r]/)) {
+      lines++
+      // Most prose has one visible character per UTF-16 unit. Only use
+      // Unicode segmentation where a line can contain composite graphemes.
+      if (/^[\x20-\x7e\t\u4e00-\u9fff]*$/.test(line)) characters += line.length
+      else for (const _ of graphemes.segment(line)) characters++
+    }
   }
+  return { words: countWords(markdown), characters, lines }
 }
 
 export function fileNameFromPath(path: string | null): string {

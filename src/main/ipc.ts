@@ -4,6 +4,7 @@ import {
   clipboard,
   dialog,
   ipcMain,
+  nativeTheme,
   net,
   protocol,
   shell,
@@ -1612,6 +1613,22 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     listMarkdownRecursive(assertPathAccess(folderPath), 0)
   )
 
+  handle(IPC.exportDiagramPng, async (_event, data: ArrayBuffer): Promise<SaveResult> => {
+    if (!(data instanceof ArrayBuffer) || data.byteLength > MAX_IMAGE_BYTES) throw new Error('Invalid PNG payload')
+    const png = Buffer.from(data)
+    if (!png.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) throw new Error('Invalid PNG signature')
+    const win = getWindow()
+    const options = {
+      title: t('dialog.exportDiagramPng'),
+      defaultPath: 'diagram.png',
+      filters: [{ name: 'PNG', extensions: ['png'] }]
+    }
+    const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return { canceled: true }
+    const version = await atomicWriteFile(result.filePath, png)
+    return { canceled: false, path: result.filePath, version }
+  })
+
   handle(IPC.exportHtml, async (
     _event,
     defaultName: string,
@@ -1941,6 +1958,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   handle(IPC.getLocale, () => getLocale())
+
+  handle(IPC.setTheme, (_event, theme: unknown) => {
+    if (theme === 'dark' || theme === 'light') nativeTheme.themeSource = theme
+  })
 
   handle(IPC.setLocale, (_event, lang: 'en' | 'zh') => {
     setLocale(lang)

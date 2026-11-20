@@ -1,5 +1,5 @@
 import themeCss from '../styles/theme.css?raw'
-import { getRenderedDiagramSvg, isMathLanguage, isMermaidLanguage } from './codeBlockCopy'
+import { renderDiagram, isMathLanguage, isMermaidLanguage } from './codeBlockCopy'
 import { selfContainedKatexCss } from './katexExportCss'
 import { renderMath } from './math'
 
@@ -10,7 +10,7 @@ function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;')
 }
 
-function addRenderedPreviews(bodyHtml: string): string {
+async function addRenderedPreviews(bodyHtml: string): Promise<string> {
   const template = document.createElement('template')
   template.innerHTML = bodyHtml
 
@@ -85,20 +85,23 @@ function addRenderedPreviews(bodyHtml: string): string {
       continue
     }
     if (isMermaidLanguage(language)) {
-      const svg = getRenderedDiagramSvg(language, content)
-      if (!svg) continue
-      const diagram = document.createElement('div')
-      diagram.className = 'diagram-export'
-      diagram.innerHTML = svg
-      pre.replaceWith(diagram)
+      try {
+        const { svg } = await renderDiagram(language, content, 'light')
+        const diagram = document.createElement('div')
+        diagram.className = 'diagram-export'
+        diagram.innerHTML = svg
+        pre.replaceWith(diagram)
+      } catch {
+        // Keep invalid diagram source readable in the exported document.
+      }
     }
   }
   return template.innerHTML
 }
 
-export function buildHtmlDocument(bodyHtml: string, title: string): string {
+export async function buildHtmlDocument(bodyHtml: string, title: string): Promise<string> {
   const safeTitle = escapeHtml(title)
-  const renderedBody = addRenderedPreviews(bodyHtml)
+  const renderedBody = await addRenderedPreviews(bodyHtml)
   return `<!doctype html>
 <html lang="en" data-theme="light">
 <head>
