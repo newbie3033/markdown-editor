@@ -139,6 +139,7 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     // variants (freeing Ctrl+0/=/- for paragraph / heading level), panel keys
     // are Ctrl+Shift+1/2/3/L, Ctrl+H opens replace, and Ctrl+Shift+I is free
     // for "insert image" (DevTools moved to F12).
+    const primaryModifier = process.platform === 'darwin' ? 'Command' : 'Ctrl'
     const accelerators: Record<string, string> = {}
     const collect = (items: Electron.MenuItem[]): void => {
       for (const item of items) {
@@ -149,24 +150,24 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     collect(Menu.getApplicationMenu()?.items ?? [])
     check(
       'menu zoom keys shifted (Typora layout)',
-      accelerators['CmdOrCtrl+Shift+0'] !== undefined &&
-        accelerators['CmdOrCtrl+Shift+='] !== undefined &&
-        accelerators['CmdOrCtrl+Shift+-'] !== undefined &&
-        accelerators['CmdOrCtrl+0'] === undefined &&
-        accelerators['CmdOrCtrl+='] === undefined,
+      accelerators[`${primaryModifier}+Shift+0`] !== undefined &&
+        accelerators[`${primaryModifier}+Shift+=`] !== undefined &&
+        accelerators[`${primaryModifier}+Shift+-`] !== undefined &&
+        accelerators[`${primaryModifier}+0`] === undefined &&
+        accelerators[`${primaryModifier}+=`] === undefined,
       JSON.stringify(Object.keys(accelerators).sort())
     )
     check(
       'menu panel keys Ctrl+Shift+1/2/3/L',
-      accelerators['CmdOrCtrl+Shift+1'] !== undefined &&
-        accelerators['CmdOrCtrl+Shift+2'] !== undefined &&
-        accelerators['CmdOrCtrl+Shift+3'] !== undefined &&
-        accelerators['CmdOrCtrl+Shift+L'] !== undefined
+      accelerators[`${primaryModifier}+Shift+1`] !== undefined &&
+        accelerators[`${primaryModifier}+Shift+2`] !== undefined &&
+        accelerators[`${primaryModifier}+Shift+3`] !== undefined &&
+        accelerators[`${primaryModifier}+Shift+L`] !== undefined
     )
-    check('menu replace Ctrl+H', accelerators['CmdOrCtrl+H'] !== undefined)
+    check('menu replace Ctrl+H', accelerators[`${primaryModifier}+H`] !== undefined)
     check(
       'devtools freed Ctrl+Shift+I',
-      accelerators['CmdOrCtrl+Shift+I'] === undefined && accelerators['F12'] !== undefined
+      accelerators[`${primaryModifier}+Shift+I`] === undefined && accelerators['F12'] !== undefined
     )
 
     // 0c. Startup "open with": a markdown file passed on the command line must

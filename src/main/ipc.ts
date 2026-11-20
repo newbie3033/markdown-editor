@@ -38,6 +38,7 @@ import {
   type RemoteImageResult,
   type SaveImagePayload,
   type SaveImageResult,
+  isMermaidStyle,
   type SaveResult,
   type SearchMatch,
   type SearchFlags,
@@ -50,7 +51,7 @@ import {
   type WriteFileResult
 } from '../shared/ipc'
 import { getLocale, setLocale, t } from './i18n'
-import { activateAppMenu, getAppMenu, rebuildMenu, setReadOnlyMode } from './menu'
+import { activateAppMenu, getAppMenu, rebuildMenu, setMermaidStyle, setReadOnlyMode } from './menu'
 
 const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown', '.mdown', '.mkd', '.mdwn', '.txt'])
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.avif'])
@@ -1964,6 +1965,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   handle(IPC.activateAppMenu, (event, id: number) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (win && Number.isSafeInteger(id)) activateAppMenu(id, win)
+  })
+
+  handle(IPC.setMermaidStyle, (_event, style: unknown) => {
+    if (isMermaidStyle(style)) setMermaidStyle(style)
   })
 
   handle(IPC.setTheme, (_event, theme: unknown) => {

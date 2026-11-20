@@ -163,6 +163,7 @@ const api: InkMarkApi = {
     return () => ipcRenderer.removeListener(IPC.appMenuUpdated, listener)
   },
   setTheme: theme => ipcRenderer.invoke(IPC.setTheme, theme),
+  setMermaidStyle: style => ipcRenderer.invoke(IPC.setMermaidStyle, style),
   setLocale: (lang: Lang): Promise<void> => ipcRenderer.invoke(IPC.setLocale, lang),
 
   getStorageStats: (): Promise<StorageStats> => ipcRenderer.invoke(IPC.getStorageStats),

@@ -4,19 +4,19 @@ import { formatShortcut } from '../lib/shortcuts'
 
 function MenuItems({ items, activate }: {
   items: AppMenuItem[]
-  activate: (id: number) => void
+  activate: (item: AppMenuItem) => void
 }): React.JSX.Element {
   return (
     <ul className="app-menu-items">
-      {items.map(item => (
-        <li key={item.id}>
+      {items.map((item, index) => (
+        <li key={`${index}:${item.label}`}>
           {item.type === 'separator' ? <hr /> : item.children ? (
             <details>
               <summary>{item.label}</summary>
               <MenuItems items={item.children} activate={activate} />
             </details>
           ) : (
-            <button type="button" disabled={!item.enabled} onClick={() => activate(item.id)}>
+            <button type="button" disabled={!item.enabled} onClick={() => activate(item)}>
               <span className="app-menu-check" aria-hidden="true">{item.checked ? '✓' : ''}</span>
               <span>{item.label}</span>
               {item.accelerator && <kbd>{formatShortcut(item.accelerator)}</kbd>}
@@ -65,7 +65,7 @@ export function AppMenu(): React.JSX.Element | null {
   return (
     <nav ref={bar} className="app-menubar">
       {items.map((item, index) => (
-        <div key={item.id} className="app-menu-group">
+        <div key={`${index}:${item.label}`} className="app-menu-group">
           <button type="button" aria-expanded={open === index}
             onMouseDown={event => event.preventDefault()}
             onClick={() => setOpen(open === index ? null : index)}
@@ -77,9 +77,9 @@ export function AppMenu(): React.JSX.Element | null {
               // Keep the editor selection available for Cut, Copy and Paste.
               if (event.target instanceof Element && event.target.closest('button')) event.preventDefault()
             }}>
-              <MenuItems items={item.children} activate={id => {
-                setOpen(null)
-                void window.api.activateAppMenu(id)
+              <MenuItems items={item.children} activate={item => {
+                if (!item.keepOpen) setOpen(null)
+                void window.api.activateAppMenu(item.id)
               }} />
             </div>
           )}

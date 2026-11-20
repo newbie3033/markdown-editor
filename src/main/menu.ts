@@ -1,10 +1,11 @@
 import { BaseWindow, BrowserWindow, Menu, MenuItemConstructorOptions, nativeTheme, shell } from 'electron'
-import { IPC, REPOSITORY_URL, type AppMenuItem, type Lang, type MenuAction } from '../shared/ipc'
+import { DEFAULT_MERMAID_STYLE, IPC, MERMAID_STYLES, REPOSITORY_URL, type AppMenuItem, type Lang, type MenuAction, type MermaidStyle } from '../shared/ipc'
 import { getLocale, t } from './i18n'
 import { checkForUpdates } from './update'
 
 let getWindowRef: () => BrowserWindow | null = () => null
 let readOnlyMode = false
+let mermaidStyle = DEFAULT_MERMAID_STYLE
 
 function send(action: MenuAction, win: BrowserWindow | BaseWindow | null | undefined): void {
   if (win && 'webContents' in win) {
@@ -15,6 +16,12 @@ function send(action: MenuAction, win: BrowserWindow | BaseWindow | null | undef
 export function setReadOnlyMode(value: boolean): void {
   if (readOnlyMode === value) return
   readOnlyMode = value
+  rebuildMenu()
+}
+
+export function setMermaidStyle(value: MermaidStyle): void {
+  if (mermaidStyle === value) return
+  mermaidStyle = value
   rebuildMenu()
 }
 
@@ -121,6 +128,7 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
         },
         { type: 'separator' },
         {
+          id: 'theme-settings',
           label: t('menu.theme'),
           submenu: [
             ...(['system', 'light', 'dark'] as const).map(theme => ({
@@ -131,6 +139,19 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
                 send(`theme-${theme}`, win ?? getWindowRef())
             }))
           ]
+        },
+        {
+          id: 'mermaid-style-settings',
+          label: t('menu.mermaidStyle'),
+          submenu: MERMAID_STYLES.map(style => ({
+            label: style === 'soft' ? t('menu.mermaidSoft')
+              : style === 'classic-blue' ? t('menu.mermaidBlue')
+              : style === 'github' ? 'GitHub'
+              : style.charAt(0).toUpperCase() + style.slice(1),
+            type: 'radio',
+            checked: mermaidStyle === style,
+            click: (_item, win) => send(`mermaid-style-${style}`, win ?? getWindowRef())
+          }))
         },
         {
           label: t('menu.readOnlyMode'),
@@ -224,7 +245,7 @@ export function rebuildMenu(): void {
   }
 }
 
-function describeMenu(menu: Menu): AppMenuItem[] {
+function describeMenu(menu: Menu, keepOpen = false): AppMenuItem[] {
   return menu.items.filter(item => item.visible).map(item => ({
     id: item.commandId,
     label: item.label,
@@ -232,7 +253,11 @@ function describeMenu(menu: Menu): AppMenuItem[] {
     enabled: item.enabled,
     checked: item.checked,
     accelerator: item.accelerator ?? undefined,
-    children: item.submenu && describeMenu(item.submenu)
+    keepOpen,
+    children: item.submenu && describeMenu(
+      item.submenu,
+      item.id === 'theme-settings' || item.id === 'mermaid-style-settings'
+    )
   }))
 }
 

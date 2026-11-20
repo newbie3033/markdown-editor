@@ -2,6 +2,7 @@ import themeCss from '../styles/theme.css?raw'
 import { renderDiagram, isMathLanguage, isMermaidLanguage } from './codeBlockCopy'
 import { selfContainedKatexCss } from './katexExportCss'
 import { renderMath } from './math'
+import { getMermaidStyle, mermaidBackground } from './mermaidTheme'
 
 function escapeHtml(text: string): string {
   return text
@@ -11,6 +12,7 @@ function escapeHtml(text: string): string {
 }
 
 async function addRenderedPreviews(bodyHtml: string): Promise<string> {
+  const style = getMermaidStyle()
   const template = document.createElement('template')
   template.innerHTML = bodyHtml
 
@@ -86,9 +88,10 @@ async function addRenderedPreviews(bodyHtml: string): Promise<string> {
     }
     if (isMermaidLanguage(language)) {
       try {
-        const { svg } = await renderDiagram(language, content, 'light')
+        const { svg } = await renderDiagram(language, content, 'light', style)
         const diagram = document.createElement('div')
         diagram.className = 'diagram-export'
+        diagram.style.backgroundColor = mermaidBackground(style, 'light')
         diagram.innerHTML = svg
         pre.replaceWith(diagram)
       } catch {

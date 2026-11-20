@@ -3,7 +3,7 @@ import { editorViewCtx, parserCtx, type Editor } from '@milkdown/kit/core'
 import { DOMSerializer } from '@milkdown/prose/model'
 import { AllSelection } from '@milkdown/prose/state'
 import { getMarkdown, getHTML, replaceAll as replaceAllRaw } from '@milkdown/kit/utils'
-import type { FileVersion, MenuAction, SearchFlags, ThemePreference } from '../../shared/ipc'
+import { DEFAULT_MERMAID_STYLE, isMermaidStyle, type FileVersion, type MenuAction, type SearchFlags, type ThemePreference } from '../../shared/ipc'
 const MarkdownEditor = lazy(() =>
   import('./components/MarkdownEditor').then((module) => ({ default: module.MarkdownEditor }))
 )
@@ -66,6 +66,10 @@ export default function App(): React.JSX.Element {
   } | null>(null)
   const [replaceOpen, setReplaceOpen] = useState(false)
   const [readOnly, setReadOnly] = useState(false)
+  const [mermaidStyle, setMermaidStyle] = useState(() => {
+    const saved = localStorage.getItem('inkmark.mermaidStyle')
+    return isMermaidStyle(saved) ? saved : DEFAULT_MERMAID_STYLE
+  })
   const [theme, setTheme] = useState<ThemePreference>(() => {
     const saved = localStorage.getItem('inkmark.theme')
     return saved === 'dark' || saved === 'light' ? saved : 'system'
@@ -196,6 +200,12 @@ export default function App(): React.JSX.Element {
       }
     }
   }, [localeReady, recoveryReady, lang])
+
+  useEffect(() => {
+    document.documentElement.dataset.mermaidStyle = mermaidStyle
+    localStorage.setItem('inkmark.mermaidStyle', mermaidStyle)
+    void window.api.setMermaidStyle(mermaidStyle)
+  }, [mermaidStyle])
 
   useEffect(() => {
     localStorage.setItem('inkmark.theme', theme)
@@ -993,6 +1003,15 @@ export default function App(): React.JSX.Element {
         case 'toggle-outline':
           setShowOutline((v) => !v)
           break
+        case 'mermaid-style-soft':
+        case 'mermaid-style-classic-blue':
+        case 'mermaid-style-github':
+        case 'mermaid-style-default':
+        case 'mermaid-style-base': {
+          const style = action.slice('mermaid-style-'.length)
+          if (isMermaidStyle(style)) setMermaidStyle(style)
+          break
+        }
         case 'theme-system':
           setTheme('system')
           break

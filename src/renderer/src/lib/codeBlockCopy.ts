@@ -5,6 +5,7 @@ import { $prose } from '@milkdown/utils'
 import { tStatic } from './i18n'
 import { diagramPng } from './diagramPng'
 import { renderMath } from './math'
+import { getMermaidStyle, mermaidBackground, mermaidConfig, type DiagramTheme } from './mermaidTheme'
 
 export const TOGGLE_PREVIEW_SOURCE_EVENT = 'inkmark-toggle-preview-source'
 
@@ -36,51 +37,23 @@ const MERMAID_LANGUAGES = new Set([
 ])
 
 let mermaidRenderId = 0
-type DiagramTheme = 'light' | 'dark'
-let configuredTheme: DiagramTheme | undefined
+let configuredTheme: string | undefined
 let renderQueue = Promise.resolve()
 
 // Mermaid configuration is global. Keep each theme change and its render
 // together so a light export can run while a dark editor preview is pending.
-export function renderDiagram(language: string, content: string, theme: DiagramTheme) {
+export function renderDiagram(language: string, content: string, theme: DiagramTheme, style = getMermaidStyle()) {
+  const configKey = `${style}:${theme}`
   const render = renderQueue.then(async () => {
     const { default: mermaid } = await import('mermaid')
-    if (configuredTheme !== theme) {
-      const dark = theme === 'dark'
-      const ink = dark ? '#acd6ff' : '#174c78'
-      const outline = dark ? '#345575' : '#bdd4e8'
-      const paper = dark ? '#0d1117' : '#ffffff'
+    if (configuredTheme !== configKey) {
       mermaid.initialize({
+        ...mermaidConfig(style, theme),
         startOnLoad: false,
         securityLevel: 'strict',
-        suppressErrorRendering: true,
-        theme: 'base',
-        htmlLabels: false,
-        themeCSS: `
-          .node rect.label-container { rx: 12px; ry: 12px; }
-          .node polygon.label-container { fill: ${dark ? '#14273a' : '#f4f9ff'}; }
-          .node .label text, .node .label tspan[font-weight="normal"],
-          .edgeLabel tspan[font-weight="normal"] { font-weight: 600; }
-          .edgeLabel text { paint-order: stroke; stroke: ${paper}; stroke-width: 4px; stroke-linejoin: round; }
-          .edgeLabel .label rect { rx: 8px; ry: 8px; }
-        `,
-        themeVariables: {
-          darkMode: dark, background: paper,
-          fontFamily: 'system-ui, sans-serif', fontSize: '14px',
-          primaryColor: dark ? '#102e49' : '#e6f3ff',
-          secondaryColor: dark ? '#162638' : '#f3f8fc',
-          tertiaryColor: dark ? '#282c42' : '#f3f1fa',
-          primaryTextColor: ink, secondaryTextColor: ink, tertiaryTextColor: ink,
-          textColor: ink, primaryBorderColor: outline,
-          lineColor: dark ? '#7494af' : '#7390a7',
-          edgeLabelBackground: paper,
-          clusterBkg: dark ? '#18232b' : '#f6f9fa',
-          clusterBorder: dark ? '#43525e' : '#c8d4d9',
-          actorTextColor: ink, signalTextColor: ink, signalColor: ink,
-        },
-        flowchart: { htmlLabels: false, curve: 'linear', nodeSpacing: 36, rankSpacing: 48, padding: 12 },
+        suppressErrorRendering: true
       })
-      configuredTheme = theme
+      configuredTheme = configKey
     }
     return mermaid.render(`inkmark-mermaid-${++mermaidRenderId}`, normalizeMermaidSource(language, content))
   })
@@ -289,7 +262,10 @@ class CodeBlockView {
     this.themeObserver.disconnect()
     this.preview.hidden = true
     this.preview.className = 'diagram-preview'
-    if (!keepDiagram) this.preview.replaceChildren()
+    if (!keepDiagram) {
+      this.preview.replaceChildren()
+      this.preview.style.removeProperty('background-color')
+    }
 
     if (isMathLanguage(language) && content.trim()) {
       this.setPreviewKind('math')
@@ -312,7 +288,7 @@ class CodeBlockView {
     this.setPreviewKind('mermaid')
     this.preview.classList.add('mermaid-preview')
     this.preview.hidden = false
-    this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+    this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-mermaid-style'] })
     if (!keepDiagram) this.preview.textContent = tStatic('code.renderingDiagram')
     this.previewTimer = setTimeout(() => {
       this.previewTimer = null
@@ -327,17 +303,20 @@ class CodeBlockView {
   ): Promise<void> {
     try {
       const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
-      const result = await renderDiagram(language, content, theme)
+      const style = getMermaidStyle()
+      const result = await renderDiagram(language, content, theme, style)
       if (generation !== this.previewGeneration) return
       this.preview.replaceChildren()
       const svg = document.createElement('div')
       svg.innerHTML = result.svg
       this.preview.appendChild(svg)
+      this.preview.style.backgroundColor = mermaidBackground(style, theme)
       this.savePngButton.hidden = false
       this.savePngButton.disabled = this.savingPng
       result.bindFunctions?.(this.preview)
     } catch (error) {
       if (generation !== this.previewGeneration) return
+      this.preview.style.removeProperty('background-color')
       this.preview.classList.add('diagram-error')
       this.preview.textContent = `${tStatic('code.diagramError')}: ${error instanceof Error ? error.message : String(error)}`
     }

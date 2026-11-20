@@ -2,6 +2,14 @@
 // the renderer. Types are erased at build time; only the string constants and
 // shapes are shared.
 
+export const MERMAID_STYLES = ['soft', 'classic-blue', 'github', 'default', 'base'] as const
+export type MermaidStyle = (typeof MERMAID_STYLES)[number]
+export const DEFAULT_MERMAID_STYLE: MermaidStyle = 'soft'
+
+export function isMermaidStyle(value: unknown): value is MermaidStyle {
+  return MERMAID_STYLES.some(style => style === value)
+}
+
 export type ThemePreference = 'system' | 'light' | 'dark'
 
 export interface AppMenuItem {
@@ -11,6 +19,7 @@ export interface AppMenuItem {
   enabled: boolean
   checked: boolean
   accelerator?: string
+  keepOpen?: boolean
   children?: AppMenuItem[]
 }
 
@@ -228,6 +237,7 @@ export type MenuAction =
   | 'toggle-articles'
   | 'toggle-file-tree'
   | 'toggle-outline'
+  | `mermaid-style-${MermaidStyle}`
   | 'theme-system'
   | 'theme-light'
   | 'theme-dark'
@@ -285,6 +295,7 @@ export const IPC = {
   appMenuUpdated: 'app:menu-updated',
   activateAppMenu: 'app:activate-menu',
   setTheme: 'app:set-theme',
+  setMermaidStyle: 'app:set-mermaid-style',
   setLocale: 'app:set-locale',
   getStorageStats: 'storage:stats',
   cleanStorage: 'storage:clean',
@@ -359,6 +370,7 @@ export interface InkMarkApi {
   onAppMenuUpdated(callback: (items: AppMenuItem[]) => void): () => void
   activateAppMenu(id: number): Promise<void>
   setTheme(theme: ThemePreference): Promise<void>
+  setMermaidStyle(style: MermaidStyle): Promise<void>
   setLocale(lang: Lang): Promise<void>
   getStorageStats(): Promise<StorageStats>
   cleanStorage(categories: StorageCategoryId[]): Promise<StorageCleanupResult>
