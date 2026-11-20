@@ -1,3 +1,4 @@
+import { formatShortcut } from '../lib/shortcuts'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Editor } from '@milkdown/kit/core'
 import { editorStateCtx, editorViewCtx } from '@milkdown/kit/core'
@@ -216,7 +217,7 @@ export function EditorContextMenu({
               onClick={() => void handleClick(item)}
             >
               <span className="ctx-label">{t(item.labelKey)}</span>
-              {item.shortcut && <span className="ctx-shortcut">{item.shortcut}</span>}
+              {item.shortcut && <span className="ctx-shortcut">{formatShortcut(item.shortcut)}</span>}
             </button>
           ))}
         </div>

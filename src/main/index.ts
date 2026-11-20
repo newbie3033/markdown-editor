@@ -101,6 +101,8 @@ function createWindow(): void {
     }
   })
 
+  if (process.platform === 'linux') mainWindow.setMenuBarVisibility(false)
+
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
     if (app.isPackaged) void checkForUpdates(mainWindow, true)

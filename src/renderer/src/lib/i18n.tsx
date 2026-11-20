@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Lang } from '../../../shared/ipc'
+import { formatShortcut } from './shortcuts'
 
 const dict = {
   en: {
@@ -323,7 +324,7 @@ console.log("你好，InkMark！")
 `
 
 export function welcomeMarkdown(lang: Lang): string {
-  return lang === 'zh' ? WELCOME_ZH : WELCOME_EN
+  return formatShortcut(lang === 'zh' ? WELCOME_ZH : WELCOME_EN)
 }
 
 // Static translation for non-React contexts (e.g. ProseMirror node views).
@@ -334,7 +335,7 @@ export function setActiveLang(lang: Lang): void {
 }
 
 export function tStatic(key: MessageKey, params?: Record<string, string | number>): string {
-  let text: string = dict[activeLang][key]
+  let text = formatShortcut(dict[activeLang][key])
   if (params) {
     for (const [name, replacement] of Object.entries(params)) {
       text = text.replace(`{${name}}`, String(replacement))
@@ -380,7 +381,7 @@ export function I18nProvider({ children }: { children: ReactNode }): React.JSX.E
         void window.api.setLocale(next)
       },
       t: (key: MessageKey, params?: Record<string, string | number>) => {
-        let text: string = dict[lang][key]
+        let text = formatShortcut(dict[lang][key])
         if (params) {
           for (const [name, replacement] of Object.entries(params)) {
             text = text.replace(`{${name}}`, String(replacement))

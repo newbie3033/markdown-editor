@@ -2,6 +2,18 @@
 // the renderer. Types are erased at build time; only the string constants and
 // shapes are shared.
 
+export type ThemePreference = 'system' | 'light' | 'dark'
+
+export interface AppMenuItem {
+  id: number
+  label: string
+  type: string
+  enabled: boolean
+  checked: boolean
+  accelerator?: string
+  children?: AppMenuItem[]
+}
+
 export type Lang = 'en' | 'zh'
 
 export interface FileResult {
@@ -216,6 +228,7 @@ export type MenuAction =
   | 'toggle-articles'
   | 'toggle-file-tree'
   | 'toggle-outline'
+  | 'theme-system'
   | 'theme-light'
   | 'theme-dark'
   | 'lang-en'
@@ -268,6 +281,9 @@ export const IPC = {
   showAbout: 'app:show-about',
   setReadOnly: 'app:set-read-only',
   getLocale: 'app:get-locale',
+  getAppMenu: 'app:get-menu',
+  appMenuUpdated: 'app:menu-updated',
+  activateAppMenu: 'app:activate-menu',
   setTheme: 'app:set-theme',
   setLocale: 'app:set-locale',
   getStorageStats: 'storage:stats',
@@ -294,6 +310,7 @@ export const REPOSITORY_URL = 'https://github.com/newbie3033/markdown-editor'
 export const RELEASES_URL = `${REPOSITORY_URL}/releases/latest`
 
 export interface InkMarkApi {
+  readonly platform: string
   openFileDialog(): Promise<FileResult>
   saveFileDialog(
     defaultPath: string | null,
@@ -338,7 +355,10 @@ export interface InkMarkApi {
   clearRecoveryDraft(): Promise<void>
   confirmRecovery(fileName: string, updatedAt: number): Promise<RecoveryChoice>
   getLocale(): Promise<Lang>
-  setTheme(theme: 'light' | 'dark'): Promise<void>
+  getAppMenu(): Promise<AppMenuItem[] | null>
+  onAppMenuUpdated(callback: (items: AppMenuItem[]) => void): () => void
+  activateAppMenu(id: number): Promise<void>
+  setTheme(theme: ThemePreference): Promise<void>
   setLocale(lang: Lang): Promise<void>
   getStorageStats(): Promise<StorageStats>
   cleanStorage(categories: StorageCategoryId[]): Promise<StorageCleanupResult>

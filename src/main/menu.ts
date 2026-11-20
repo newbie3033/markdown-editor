@@ -1,5 +1,5 @@
-import { BaseWindow, BrowserWindow, Menu, MenuItemConstructorOptions, shell } from 'electron'
-import { IPC, REPOSITORY_URL, type Lang, type MenuAction } from '../shared/ipc'
+import { BaseWindow, BrowserWindow, Menu, MenuItemConstructorOptions, nativeTheme, shell } from 'electron'
+import { IPC, REPOSITORY_URL, type AppMenuItem, type Lang, type MenuAction } from '../shared/ipc'
 import { getLocale, t } from './i18n'
 import { checkForUpdates } from './update'
 
@@ -20,6 +20,7 @@ export function setReadOnlyMode(value: boolean): void {
 
 function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
   const isMac = process.platform === 'darwin'
+  const modifier = isMac ? 'Command' : 'Ctrl'
 
   return [
     ...(isMac
@@ -43,32 +44,32 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
     {
       label: t('menu.file'),
       submenu: [
-        { label: t('menu.new'), accelerator: 'CmdOrCtrl+N', click: (_i, w) => send('new', w ?? getWindowRef()) },
+        { label: t('menu.new'), accelerator: `${modifier}+N`, click: (_i, w) => send('new', w ?? getWindowRef()) },
         { label: t('menu.welcome'), click: (_i, w) => send('welcome', w ?? getWindowRef()) },
         { type: 'separator' },
-        { label: t('menu.open'), accelerator: 'CmdOrCtrl+O', click: (_i, w) => send('open', w ?? getWindowRef()) },
+        { label: t('menu.open'), accelerator: `${modifier}+O`, click: (_i, w) => send('open', w ?? getWindowRef()) },
         {
           label: t('menu.openFolder'),
-          accelerator: 'CmdOrCtrl+Shift+O',
+          accelerator: `${modifier}+Shift+O`,
           click: (_i, w) => send('open-folder', w ?? getWindowRef())
         },
         {
           label: t('menu.searchFolder'),
-          accelerator: 'CmdOrCtrl+Shift+F',
+          accelerator: `${modifier}+Shift+F`,
           click: (_i, w) => send('search-folder', w ?? getWindowRef())
         },
         { label: t('menu.closeFolder'), click: (_i, w) => send('close-folder', w ?? getWindowRef()) },
         { type: 'separator' },
-        { label: t('menu.save'), accelerator: 'CmdOrCtrl+S', click: (_i, w) => send('save', w ?? getWindowRef()) },
+        { label: t('menu.save'), accelerator: `${modifier}+S`, click: (_i, w) => send('save', w ?? getWindowRef()) },
         {
           label: t('menu.saveAs'),
-          accelerator: 'CmdOrCtrl+Shift+S',
+          accelerator: `${modifier}+Shift+S`,
           click: (_i, w) => send('save-as', w ?? getWindowRef())
         },
         { type: 'separator' },
         { label: t('menu.exportHtml'), click: (_i, w) => send('export-html', w ?? getWindowRef()) },
         { label: t('menu.exportPdf'), click: (_i, w) => send('export-pdf', w ?? getWindowRef()) },
-        { label: t('menu.print'), accelerator: 'CmdOrCtrl+P', click: (_i, w) => send('print', w ?? getWindowRef()) },
+        { label: t('menu.print'), accelerator: `${modifier}+P`, click: (_i, w) => send('print', w ?? getWindowRef()) },
         { type: 'separator' },
         isMac
           ? { role: 'close' as const, label: t('menu.close') }
@@ -86,8 +87,8 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
         { role: 'paste', label: t('menu.paste') },
         { role: 'selectAll', label: t('menu.selectAll') },
         { type: 'separator' },
-        { label: t('menu.find'), accelerator: 'CmdOrCtrl+F', click: (_i, w) => send('find', w ?? getWindowRef()) },
-        { label: t('menu.replace'), accelerator: 'CmdOrCtrl+H', click: (_i, w) => send('replace', w ?? getWindowRef()) }
+        { label: t('menu.find'), accelerator: `${modifier}+F`, click: (_i, w) => send('find', w ?? getWindowRef()) },
+        { label: t('menu.replace'), accelerator: `${modifier}+H`, click: (_i, w) => send('replace', w ?? getWindowRef()) }
       ]
     },
     {
@@ -95,35 +96,40 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
       submenu: [
         {
           label: t('menu.toggleOutline'),
-          accelerator: 'CmdOrCtrl+Shift+1',
+          accelerator: `${modifier}+Shift+1`,
           click: (_i, w) => send('toggle-outline', w ?? getWindowRef())
         },
         {
           label: t('menu.toggleArticles'),
-          accelerator: 'CmdOrCtrl+Shift+2',
+          accelerator: `${modifier}+Shift+2`,
           click: (_i, w) => send('toggle-articles', w ?? getWindowRef())
         },
         {
           label: t('menu.toggleFileTree'),
-          accelerator: 'CmdOrCtrl+Shift+3',
+          accelerator: `${modifier}+Shift+3`,
           click: (_i, w) => send('toggle-file-tree', w ?? getWindowRef())
         },
         {
           label: t('menu.toggleSidebar'),
-          accelerator: 'CmdOrCtrl+Shift+L',
+          accelerator: `${modifier}+Shift+L`,
           click: (_i, w) => send('toggle-sidebar', w ?? getWindowRef())
         },
         {
           label: t('menu.toggleSource'),
-          accelerator: 'CmdOrCtrl+/',
+          accelerator: `${modifier}+/`,
           click: (_i, w) => send('toggle-source', w ?? getWindowRef())
         },
         { type: 'separator' },
         {
           label: t('menu.theme'),
           submenu: [
-            { label: t('menu.themeLight'), click: (_i, w) => send('theme-light', w ?? getWindowRef()) },
-            { label: t('menu.themeDark'), click: (_i, w) => send('theme-dark', w ?? getWindowRef()) }
+            ...(['system', 'light', 'dark'] as const).map(theme => ({
+              label: t(({ system: 'menu.themeSystem', light: 'menu.themeLight', dark: 'menu.themeDark' } as const)[theme]),
+              type: 'radio' as const,
+              checked: nativeTheme.themeSource === theme,
+              click: (_item: Electron.MenuItem, win: BrowserWindow | BaseWindow | undefined) =>
+                send(`theme-${theme}`, win ?? getWindowRef())
+            }))
           ]
         },
         {
@@ -152,17 +158,17 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
         { type: 'separator' },
         {
           label: t('menu.actualSize'),
-          accelerator: 'CmdOrCtrl+Shift+0',
+          accelerator: `${modifier}+Shift+0`,
           click: (_i, w) => send('zoom-reset', w ?? getWindowRef())
         },
         {
           label: t('menu.zoomIn'),
-          accelerator: 'CmdOrCtrl+Shift+=',
+          accelerator: `${modifier}+Shift+=`,
           click: (_i, w) => send('zoom-in', w ?? getWindowRef())
         },
         {
           label: t('menu.zoomOut'),
-          accelerator: 'CmdOrCtrl+Shift+-',
+          accelerator: `${modifier}+Shift+-`,
           click: (_i, w) => send('zoom-out', w ?? getWindowRef())
         },
         { type: 'separator' },
@@ -205,9 +211,50 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
 
 export function buildMenu(getWindow: () => BrowserWindow | null): void {
   getWindowRef = getWindow
-  Menu.setApplicationMenu(Menu.buildFromTemplate(buildTemplate(getLocale())))
+  rebuildMenu()
 }
 
 export function rebuildMenu(): void {
-  Menu.setApplicationMenu(Menu.buildFromTemplate(buildTemplate(getLocale())))
+  const menu = Menu.buildFromTemplate(buildTemplate(getLocale()))
+  Menu.setApplicationMenu(menu)
+  const win = getWindowRef()
+  if (process.platform === 'linux' && win && !win.isDestroyed()) {
+    win.setMenuBarVisibility(false)
+    win.webContents.send(IPC.appMenuUpdated, describeMenu(menu))
+  }
+}
+
+function describeMenu(menu: Menu): AppMenuItem[] {
+  return menu.items.filter(item => item.visible).map(item => ({
+    id: item.commandId,
+    label: item.label,
+    type: item.type,
+    enabled: item.enabled,
+    checked: item.checked,
+    accelerator: item.accelerator ?? undefined,
+    children: item.submenu && describeMenu(item.submenu)
+  }))
+}
+
+export function getAppMenu(): AppMenuItem[] | null {
+  const menu = Menu.getApplicationMenu()
+  return process.platform === 'linux' && menu ? describeMenu(menu) : null
+}
+
+export function activateAppMenu(id: number, win: BrowserWindow): void {
+  if (process.platform !== 'linux') return
+  function activate(menu: Menu): boolean {
+    for (const item of menu.items) {
+      if (!item.visible || !item.enabled) continue
+      if (item.submenu) {
+        if (activate(item.submenu)) return true
+      } else if (item.commandId === id && item.type !== 'separator') {
+        item.click(undefined, win, win.webContents)
+        return true
+      }
+    }
+    return false
+  }
+  const menu = Menu.getApplicationMenu()
+  if (menu) activate(menu)
 }

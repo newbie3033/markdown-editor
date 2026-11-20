@@ -12,9 +12,7 @@ const iconPaths = {
   outline: 'M3 5h17M6 10h14M6 15h14M3 20h17',
   locked: 'M6 10h12v11H6z M8 10V7a4 4 0 0 1 8 0v3',
   edit: 'm4 16 11-11 4 4L8 20l-5 1z M13 7l4 4',
-  source: 'm7 7-5 5 5 5m10-10 5 5-5 5m-4-13-3 20',
-  moon: 'M20 15A8 8 0 0 1 9 4a8.5 8.5 0 1 0 11 11z',
-  sun: 'M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0z M12 2v2m0 16v2M2 12h2m16 0h2M5 5l2 2m10 10 2 2M5 19l2-2M17 7l2-2'
+  source: 'm7 7-5 5 5 5m10-10 5 5-5 5m-4-13-3 20'
 }
 
 function StatusIcon({ name }: { name: keyof typeof iconPaths }): React.JSX.Element {
@@ -32,8 +30,6 @@ type StatusBarItemId =
   | 'dirty'
   | 'path'
   | 'source'
-  | 'theme'
-  | 'lang'
   | 'zoom'
   | 'words'
   | 'chars'
@@ -45,8 +41,6 @@ const DEFAULT_VISIBLE: Record<StatusBarItemId, boolean> = {
   dirty: true,
   path: true,
   source: true,
-  theme: true,
-  lang: true,
   zoom: true,
   words: true,
   chars: true,
@@ -74,8 +68,6 @@ interface MenuItemDef {
     | 'status.dirtyIndicator'
     | 'status.filePathLabel'
     | 'status.sourceMode'
-    | 'status.theme'
-    | 'status.language'
     | 'status.zoomLabel'
     | 'status.words'
     | 'status.chars'
@@ -88,8 +80,6 @@ const MENU_ITEMS: MenuItemDef[] = [
   { id: 'dirty', labelKey: 'status.dirtyIndicator' },
   { id: 'path', labelKey: 'status.filePathLabel' },
   { id: 'source', labelKey: 'status.sourceMode' },
-  { id: 'theme', labelKey: 'status.theme' },
-  { id: 'lang', labelKey: 'status.language' },
   { id: 'zoom', labelKey: 'status.zoomLabel' },
   { id: 'words', labelKey: 'status.words' },
   { id: 'chars', labelKey: 'status.chars' },
@@ -101,15 +91,12 @@ interface StatusBarProps {
   filePath: string | null
   dirty: boolean
   sourceMode: boolean
-  theme: 'light' | 'dark'
   lang: Lang
   zoomLevel: number
   readOnly: boolean
   showSidebar: boolean
   showOutline: boolean
   onToggleSource: () => void
-  onToggleTheme: () => void
-  onToggleLang: () => void
   onToggleSidebar: () => void
   onToggleOutline: () => void
   onToggleReadOnly: () => void
@@ -123,15 +110,12 @@ export function StatusBar({
   filePath,
   dirty,
   sourceMode,
-  theme,
   lang,
   zoomLevel,
   readOnly,
   showSidebar,
   showOutline,
   onToggleSource,
-  onToggleTheme,
-  onToggleLang,
   onToggleSidebar,
   onToggleOutline,
   onToggleReadOnly,
@@ -244,16 +228,6 @@ export function StatusBar({
             title={t('status.sourceMode')}
           >
             <StatusIcon name="source" />
-          </button>
-        )}
-        {visible.theme && (
-          <button className="status-item status-btn" onClick={onToggleTheme} title={t('status.theme')}>
-            <StatusIcon name={theme === 'light' ? 'moon' : 'sun'} />
-          </button>
-        )}
-        {visible.lang && (
-          <button className="status-item status-btn" onClick={onToggleLang} title={t('status.language')}>
-            {lang === 'zh' ? 'EN' : '中'}
           </button>
         )}
         {visible.zoom && (

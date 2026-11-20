@@ -3,13 +3,14 @@ import { editorViewCtx, parserCtx, type Editor } from '@milkdown/kit/core'
 import { DOMSerializer } from '@milkdown/prose/model'
 import { AllSelection } from '@milkdown/prose/state'
 import { getMarkdown, getHTML, replaceAll as replaceAllRaw } from '@milkdown/kit/utils'
-import type { FileVersion, MenuAction, SearchFlags } from '../../shared/ipc'
+import type { FileVersion, MenuAction, SearchFlags, ThemePreference } from '../../shared/ipc'
 const MarkdownEditor = lazy(() =>
   import('./components/MarkdownEditor').then((module) => ({ default: module.MarkdownEditor }))
 )
 import { ImagePreview, type PreviewImage } from './components/ImagePreview'
 import { Sidebar, type SidebarTab, type FolderState } from './components/Sidebar'
 import { OutlinePanel } from './components/OutlinePanel'
+import { AppMenu } from './components/AppMenu'
 import { StatusBar } from './components/StatusBar'
 import { EditorContextMenu } from './components/EditorContextMenu'
 import { FindBar } from './components/FindBar'
@@ -65,7 +66,10 @@ export default function App(): React.JSX.Element {
   } | null>(null)
   const [replaceOpen, setReplaceOpen] = useState(false)
   const [readOnly, setReadOnly] = useState(false)
-  const [theme, setTheme] = useState<'light' | 'dark'>('light')
+  const [theme, setTheme] = useState<ThemePreference>(() => {
+    const saved = localStorage.getItem('inkmark.theme')
+    return saved === 'dark' || saved === 'light' ? saved : 'system'
+  })
   const [outline, setOutline] = useState<OutlineItem[]>([])
   const [ctxMenu, setCtxMenu] = useState<{
     x: number
@@ -193,13 +197,23 @@ export default function App(): React.JSX.Element {
     }
   }, [localeReady, recoveryReady, lang])
 
-  // Persist theme + window title + editor placeholder text.
   useEffect(() => {
+    localStorage.setItem('inkmark.theme', theme)
     void window.api.setTheme(theme)
-    document.documentElement.setAttribute('data-theme', theme)
+    const system = window.matchMedia('(prefers-color-scheme: dark)')
+    const applyTheme = () => {
+      document.documentElement.dataset.theme =
+        theme === 'system' ? (system.matches ? 'dark' : 'light') : theme
+    }
+    applyTheme()
+    system.addEventListener('change', applyTheme)
+    return () => system.removeEventListener('change', applyTheme)
+  }, [theme])
+
+  useEffect(() => {
     document.title = `${dirty ? '● ' : ''}${title}${readOnly ? t('status.readOnlySuffix') : ''} — InkMark`
     document.documentElement.style.setProperty('--editor-placeholder', `"${t('editor.placeholder')}"`)
-  }, [theme, dirty, title, readOnly, t])
+  }, [dirty, title, readOnly, t])
 
   // Zoom: read the initial level from the main process; all changes flow
   // through applyZoom so the status bar stays in sync.
@@ -979,6 +993,9 @@ export default function App(): React.JSX.Element {
         case 'toggle-outline':
           setShowOutline((v) => !v)
           break
+        case 'theme-system':
+          setTheme('system')
+          break
         case 'theme-light':
           setTheme('light')
           break
@@ -1231,6 +1248,7 @@ export default function App(): React.JSX.Element {
 
   return (
     <div className="app">
+      <AppMenu />
       {showSidebar && (
         <Sidebar
           tab={sidebarTab}
@@ -1332,7 +1350,6 @@ export default function App(): React.JSX.Element {
         filePath={filePath}
         dirty={dirty}
         sourceMode={sourceMode}
-        theme={theme}
         lang={lang}
         zoomLevel={zoomLevel}
         readOnly={readOnly}
@@ -1342,8 +1359,6 @@ export default function App(): React.JSX.Element {
         onToggleOutline={() => setShowOutline((v) => !v)}
         onToggleReadOnly={() => setReadOnlyMode(!readOnly)}
         onToggleSource={toggleSourceMode}
-        onToggleTheme={() => setTheme((th) => (th === 'light' ? 'dark' : 'light'))}
-        onToggleLang={() => setLang(lang === 'zh' ? 'en' : 'zh')}
         onZoomIn={() => applyZoom(zoomRef.current + 0.5)}
         onZoomOut={() => applyZoom(zoomRef.current - 0.5)}
         onZoomReset={() => applyZoom(0)}

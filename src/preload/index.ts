@@ -32,6 +32,7 @@ const selfTestEnabled =
   !process.argv.includes('--inkmark-selftest-disabled')
 
 const api: InkMarkApi = {
+  platform: process.platform,
   openFileDialog: (): Promise<FileResult> => ipcRenderer.invoke(IPC.openFileDialog),
 
   saveFileDialog: (
@@ -154,6 +155,13 @@ const api: InkMarkApi = {
 
   getLocale: (): Promise<Lang> => ipcRenderer.invoke(IPC.getLocale),
 
+  getAppMenu: () => ipcRenderer.invoke(IPC.getAppMenu),
+  activateAppMenu: id => ipcRenderer.invoke(IPC.activateAppMenu, id),
+  onAppMenuUpdated: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, items: Parameters<typeof callback>[0]) => callback(items)
+    ipcRenderer.on(IPC.appMenuUpdated, listener)
+    return () => ipcRenderer.removeListener(IPC.appMenuUpdated, listener)
+  },
   setTheme: theme => ipcRenderer.invoke(IPC.setTheme, theme),
   setLocale: (lang: Lang): Promise<void> => ipcRenderer.invoke(IPC.setLocale, lang),
 

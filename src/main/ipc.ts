@@ -50,7 +50,7 @@ import {
   type WriteFileResult
 } from '../shared/ipc'
 import { getLocale, setLocale, t } from './i18n'
-import { setReadOnlyMode } from './menu'
+import { activateAppMenu, getAppMenu, rebuildMenu, setReadOnlyMode } from './menu'
 
 const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown', '.mdown', '.mkd', '.mdwn', '.txt'])
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.avif'])
@@ -1959,8 +1959,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   handle(IPC.getLocale, () => getLocale())
 
+  handle(IPC.getAppMenu, () => getAppMenu())
+
+  handle(IPC.activateAppMenu, (event, id: number) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (win && Number.isSafeInteger(id)) activateAppMenu(id, win)
+  })
+
   handle(IPC.setTheme, (_event, theme: unknown) => {
-    if (theme === 'dark' || theme === 'light') nativeTheme.themeSource = theme
+    if (theme !== 'system' && theme !== 'light' && theme !== 'dark') return
+    if (nativeTheme.themeSource === theme) return
+    nativeTheme.themeSource = theme
+    rebuildMenu()
   })
 
   handle(IPC.setLocale, (_event, lang: 'en' | 'zh') => {

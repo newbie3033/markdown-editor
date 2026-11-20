@@ -475,7 +475,8 @@ button {
 
 .app {
   display: grid;
-  grid-template: "files editor outline" minmax(0, 1fr)
+  grid-template: "menu menu menu" auto
+                 "files editor outline" minmax(0, 1fr)
                  "status status status" auto / auto minmax(0, 1fr) auto;
   height: 100vh;
   width: 100vw;
@@ -2200,4 +2201,65 @@ body.export-page [data-type='html_comment'] {
 /* Startup: placeholder shown while the editor chunk loads. */
 .editor-loading {
   min-height: 40vh;
+}
+
+.app-menubar {
+  display: flex;
+  grid-area: menu;
+  position: relative;
+  z-index: 100;
+  padding: 2px 8px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 13px;
+}
+.app-menu-group { position: relative; }
+.app-menu-group > button {
+  padding: 4px 9px;
+  border-radius: 5px;
+}
+.app-menu-group > button:hover,
+.app-menu-group > button[aria-expanded='true'],
+.app-menu-items button:hover,
+.app-menu-items summary:hover { background: var(--bg-hover); }
+.app-menu-popup {
+  position: absolute;
+  inset-block-start: 100%;
+  inset-inline-start: 0;
+  min-width: 240px;
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  padding: 5px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  box-shadow: 0 5px 20px rgb(0 0 0 / 20%);
+}
+.app-menu-items { list-style: none; }
+.app-menu-items button,
+.app-menu-items summary {
+  padding: 5px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.app-menu-items button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: start;
+}
+.app-menu-items button:disabled { opacity: 0.5; }
+.app-menu-check { width: 12px; }
+.app-menu-items kbd {
+  margin-inline-start: auto;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.app-menu-items details > ul { padding-inline-start: 10px; }
+.app-menu-items hr {
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--border-soft);
 }

@@ -1341,7 +1341,7 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     })()`)) as { ok?: boolean; n?: number }
     check(
       'status bar context menu opens',
-      menuOpen?.ok === true && (menuOpen?.n ?? 0) >= 10,
+      menuOpen?.ok === true && menuOpen.n === 9,
       JSON.stringify(menuOpen)
     )
     const toggleWords = (await js(`(async () => {
