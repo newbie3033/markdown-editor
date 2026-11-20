@@ -97,8 +97,8 @@ function themedConfig(style: 'soft' | 'github', theme: DiagramTheme): MermaidCon
     htmlLabels: false,
     fontFamily: 'system-ui, sans-serif',
     themeVariables,
-    flowchart: { curve: 'basis', nodeSpacing: 40, rankSpacing: 55, padding: 12 },
-    sequence: { actorMargin: 40, width: 115, height: 47, mirrorActors: false },
+    flowchart: { htmlLabels: false, curve: 'basis', nodeSpacing: 40, rankSpacing: 55, padding: 12 },
+    sequence: { actorMargin: 40, width: 115, height: 47 },
     themeCSS: `
       .node rect.label-container, .cluster rect, rect.actor { rx: ${radius}px; ry: ${radius}px; }
       .node tspan[font-weight="normal"] { font-weight: ${github ? 600 : 500}; }

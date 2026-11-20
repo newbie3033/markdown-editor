@@ -138,6 +138,7 @@ const api: InkMarkApi = {
   showAbout: (): Promise<void> => ipcRenderer.invoke(IPC.showAbout),
 
   setReadOnly: (value: boolean): Promise<void> => ipcRenderer.invoke(IPC.setReadOnly, value),
+  setDefaultReadOnly: (value: boolean): Promise<void> => ipcRenderer.invoke(IPC.setDefaultReadOnly, value),
 
   copyText: (text: string): Promise<void> => ipcRenderer.invoke(IPC.copyText, text),
 

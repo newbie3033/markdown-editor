@@ -699,8 +699,18 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
         '',
         '```mermaid',
         'flowchart LR',
-        '  A[Start] --> B["Done\\nNext line"]',
+        '  A[Start] -->|Continue to the final step| B["Done\\nNext line"]',
         '```',
+        '',
+        '```mermaid',
+        'sequenceDiagram',
+        '  participant Client as Client Application',
+        '  participant Server as Database Server',
+        '  Client->>Server: Request',
+        '  Server-->>Client: Response',
+        '```',
+        '',
+        'Paragraph after diagrams.',
         ''
       ].join('\n')
     )
@@ -847,6 +857,59 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       diagramHtml.includes('class="diagram-export"') && diagramHtml.includes('<svg'),
       `len=${diagramHtml.length}`
     )
+
+    for (const style of ['soft', 'github'] as const) {
+      const previous = await js(`({
+        style: document.documentElement.dataset.mermaidStyle,
+        ids: Array.from(document.querySelectorAll('.mermaid-preview svg'), svg => svg.id)
+      })`)
+      win.webContents.send(IPC.menuAction, `mermaid-style-${style}`)
+      const complete = (await js(`(async () => {
+        const previous = ${JSON.stringify(previous)}
+        for (let i = 0; i < 40; i += 1) {
+          const [flow, sequence] = document.querySelectorAll('.mermaid-preview svg')
+          const actorCount = sequence?.querySelectorAll('rect.actor-bottom').length
+          const label = Array.from(flow?.querySelectorAll('.edgeLabel text') ?? [])
+            .find(text => text.textContent.includes('Continue'))
+          const requestedStyle = document.documentElement.dataset.mermaidStyle === '${style}'
+          const updated = previous.style === '${style}' ||
+            (flow?.id !== previous.ids[0] && sequence?.id !== previous.ids[1])
+          if (requestedStyle && updated && actorCount === 2 && label?.getBBox().width > 0) return true
+          await new Promise(resolve => setTimeout(resolve, 100))
+        }
+        return false
+      })()`)) === true
+      check(`Mermaid ${style} renders flowchart edge labels and both rows of sequence actors`, complete)
+    }
+    win.webContents.send(IPC.menuAction, 'mermaid-style-soft')
+
+    const selectedDiagram = (await js(`(() => {
+      const preview = document.querySelector('.mermaid-preview')
+      preview?.click()
+      return preview?.parentElement.classList.contains('ProseMirror-selectednode')
+    })()`)) === true
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Delete' })
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Delete' })
+    await sleep(150)
+    const afterDiagramDelete = (await js(`window.__inkmarkGetMarkdown()`)) as string
+    check('click and Delete removes only the selected Mermaid block', selectedDiagram &&
+      !afterDiagramDelete.includes('flowchart LR') && afterDiagramDelete.includes('sequenceDiagram') &&
+      afterDiagramDelete.includes('Paragraph after diagrams.'))
+
+    const diagramMenuDeleted = (await js(`(async () => {
+      const previews = document.querySelectorAll('.mermaid-preview')
+      previews[previews.length - 1]?.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true, clientX: 320, clientY: 260
+      }))
+      await new Promise(resolve => setTimeout(resolve, 100))
+      const deleteItem = Array.from(document.querySelectorAll('.ctx-menu .ctx-item'))
+        .find(item => item.textContent === '删除图表')
+      deleteItem?.click()
+      await new Promise(resolve => setTimeout(resolve, 100))
+      const markdown = window.__inkmarkGetMarkdown()
+      return !!deleteItem && !markdown.includes('sequenceDiagram') && markdown.includes('Paragraph after diagrams.')
+    })()`)) === true
+    check('Mermaid context menu deletes the diagram under the pointer', diagramMenuDeleted)
 
     // 10. Folder-wide keyword search (content + filename).
     await fs.writeFile(
@@ -1466,12 +1529,52 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       }
     })()`)) as { found?: boolean; unchecked?: boolean; markdown?: string }
     check('read-only blocks task checkbox clicks', readOnlyTask?.unchecked === true && readOnlyTask?.markdown?.includes('[ ] Toggle me') === true, JSON.stringify(readOnlyTask))
-    const ro2 = (await js(`(async () => {
-      document.querySelector('.ProseMirror').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 500, clientY: 300 }))
-      await new Promise(r => setTimeout(r, 400))
-      return { menu: !!document.querySelector('.ctx-menu') }
-    })()`)) as { menu?: boolean }
-    check('context menu suppressed in read-only', ro2?.menu === false)
+    clipboard.writeText('Before read-only copy')
+    const readOnlyCopy = (await js(`(async () => {
+      const pm = document.querySelector('.ProseMirror')
+      const text = pm.querySelector('li[data-item-type="task"] p')?.firstChild
+      if (!text) return null
+      const openMenu = async () => {
+        text.parentElement.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true, cancelable: true, clientX: 500, clientY: 300
+        }))
+        await new Promise(r => setTimeout(r, 100))
+        return Array.from(document.querySelectorAll('.ctx-menu .ctx-item'))
+      }
+      const selection = window.getSelection()
+      selection.removeAllRanges()
+      const [disabledCopy] = await openMenu()
+      const disabledWithoutSelection = disabledCopy?.disabled
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+
+      const range = document.createRange()
+      range.setStart(text, 0)
+      range.setEnd(text, 'Toggle'.length)
+      selection.addRange(range)
+      const before = window.__inkmarkGetMarkdown()
+      const items = await openMenu()
+      const labels = items.map(item => item.querySelector('.ctx-label')?.textContent)
+      const [copy] = items
+      copy?.click()
+      await new Promise(r => setTimeout(r, 100))
+      return {
+        labels,
+        disabledWithoutSelection,
+        enabledWithSelection: copy?.disabled === false,
+        unchanged: window.__inkmarkGetMarkdown() === before,
+        menuClosed: !document.querySelector('.ctx-menu')
+      }
+    })()`)) as {
+      labels?: string[]
+      disabledWithoutSelection?: boolean
+      enabledWithSelection?: boolean
+      unchanged?: boolean
+      menuClosed?: boolean
+    } | null
+    check('read-only context menu offers only Copy', JSON.stringify(readOnlyCopy?.labels) === JSON.stringify(['复制']))
+    check('read-only Copy requires a selection', readOnlyCopy?.disabledWithoutSelection === true && readOnlyCopy?.enabledWithSelection === true, JSON.stringify(readOnlyCopy))
+    check('read-only Copy writes the selected text', clipboard.readText() === 'Toggle')
+    check('read-only Copy closes the menu without editing', readOnlyCopy?.unchanged === true && readOnlyCopy?.menuClosed === true)
     win.webContents.send(IPC.menuAction, 'mode-edit')
     await sleep(400)
     const ro3 = (await js(`document.querySelector('.ProseMirror')?.getAttribute('contenteditable')`)) as string | null
@@ -2470,6 +2573,15 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       panelsHidden?.sidebar === false && panelsHidden?.outline === false,
       JSON.stringify(panelsHidden)
     )
+    const modeMenuItem = (id: string) => Menu.getApplicationMenu()?.getMenuItemById(id)
+    check('edit mode is the initial default', modeMenuItem('default-mode-edit')?.checked === true)
+    modeMenuItem('default-mode-readonly')?.click(undefined, win, win.webContents)
+    await sleep(300)
+    const currentModeBeforeReload = await js(`document.querySelector('.ProseMirror')?.getAttribute('contenteditable')`)
+    check(
+      'selecting a default mode leaves the active mode unchanged',
+      modeMenuItem('default-mode-readonly')?.checked === true && currentModeBeforeReload === 'true'
+    )
     await js(`localStorage.setItem('inkmark.welcomeSeen', '1'); true`)
     win.webContents.reload()
     let remounted = false
@@ -2492,6 +2604,21 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       'panel visibility persists after reload',
       panelsAfter?.sidebar === false && panelsAfter?.outline === false,
       JSON.stringify(panelsAfter)
+    )
+    const startupMode = await js(`document.querySelector('.ProseMirror')?.getAttribute('contenteditable')`)
+    check(
+      'saved default starts the editor in read-only mode',
+      startupMode === 'false' && modeMenuItem('default-mode-readonly')?.checked === true &&
+        modeMenuItem('read-only-mode')?.checked === true
+    )
+    win.webContents.send(IPC.menuAction, 'mode-edit')
+    await sleep(300)
+    check('changing the active mode preserves the default', modeMenuItem('default-mode-readonly')?.checked === true)
+    modeMenuItem('default-mode-edit')?.click(undefined, win, win.webContents)
+    await sleep(300)
+    check(
+      'switching the default back to edit saves the preference',
+      modeMenuItem('default-mode-edit')?.checked === true && (await js(`localStorage.getItem('inkmark.defaultReadOnly')`)) === '0'
     )
     const blankH1 = (await js(`document.querySelector('.ProseMirror h1')?.textContent ?? null`)) as string | null
     check('welcome page only on first launch', blankH1 == null, String(blankH1))

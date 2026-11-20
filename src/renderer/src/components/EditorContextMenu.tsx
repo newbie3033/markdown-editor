@@ -9,9 +9,11 @@ interface EditorContextMenuProps {
   x: number
   y: number
   editor: Editor | null
+  readOnlySelection?: string
   showPreviewSourceToggle: boolean
   previewSourceVisible: boolean
   onTogglePreviewSource: () => void
+  onDeleteMermaid?: () => void
   ensureDocPath: () => Promise<string | null>
   onImageError: (error: unknown) => void
   onClose: () => void
@@ -23,9 +25,12 @@ interface Item {
   shortcut?: string
 }
 
+const COPY_ITEM: Item = { action: 'copy', labelKey: 'ctx.copy', shortcut: 'Ctrl+C' }
+const READ_ONLY_GROUPS = [[COPY_ITEM]]
+
 const GROUPS: Item[][] = [
   [
-    { action: 'copy', labelKey: 'ctx.copy', shortcut: 'Ctrl+C' },
+    COPY_ITEM,
     { action: 'cut', labelKey: 'ctx.cut', shortcut: 'Ctrl+X' },
     { action: 'paste', labelKey: 'ctx.paste', shortcut: 'Ctrl+V' }
   ],
@@ -65,25 +70,29 @@ export function EditorContextMenu({
   x,
   y,
   editor,
+  readOnlySelection,
   showPreviewSourceToggle,
   previewSourceVisible,
   onTogglePreviewSource,
+  onDeleteMermaid,
   ensureDocPath,
   onImageError,
   onClose
 }: EditorContextMenuProps): React.JSX.Element {
   const { t } = useI18n()
   const menuRef = useRef<HTMLDivElement>(null)
+  const readOnly = readOnlySelection !== undefined
   // Whether the editor selection is non-empty when the menu opened (drives
   // the disabled state of Copy / Cut).
   const [hasSelection, setHasSelection] = useState(false)
+  const canCopy = readOnly ? Boolean(readOnlySelection) : hasSelection
 
   useEffect(() => {
-    if (!editor) return
+    if (!editor || readOnly) return
     editor.action((ctx) => {
       setHasSelection(!ctx.get(editorStateCtx).selection.empty)
     })
-  }, [editor, x, y])
+  }, [editor, readOnly, x, y])
 
   // Clamp the menu inside the viewport once its size is known.
   useLayoutEffect(() => {
@@ -101,7 +110,7 @@ export function EditorContextMenu({
     }
     menu.style.left = `${left}px`
     menu.style.top = `${top}px`
-  }, [x, y])
+  }, [readOnly, x, y])
 
   // Close on outside click / Escape / window blur.
   useEffect(() => {
@@ -126,6 +135,10 @@ export function EditorContextMenu({
 
   const handleClick = async (item: Item): Promise<void> => {
     onClose()
+    if (readOnly) {
+      if (item.action === 'copy' && readOnlySelection) void window.api.copyText(readOnlySelection)
+      return
+    }
     if (!editor) return
 
     if (item.action === 'copy' || item.action === 'cut') {
@@ -203,17 +216,28 @@ export function EditorContextMenu({
               {t(previewSourceVisible ? 'ctx.hidePreviewSource' : 'ctx.showPreviewSource')}
             </span>
           </button>
+          {onDeleteMermaid && (
+            <button
+              className="ctx-item"
+              onClick={() => {
+                onClose()
+                onDeleteMermaid()
+              }}
+            >
+              <span className="ctx-label">{t('ctx.deleteMermaid')}</span>
+            </button>
+          )}
           <div className="ctx-separator" />
         </div>
       )}
-      {GROUPS.map((group, groupIndex) => (
+      {(readOnly ? READ_ONLY_GROUPS : GROUPS).map((group, groupIndex) => (
         <div key={groupIndex}>
           {groupIndex > 0 && <div className="ctx-separator" />}
           {group.map((item) => (
             <button
               key={item.action}
               className="ctx-item"
-              disabled={(item.action === 'copy' || item.action === 'cut') && !hasSelection}
+              disabled={(item.action === 'copy' || item.action === 'cut') && !canCopy}
               onClick={() => void handleClick(item)}
             >
               <span className="ctx-label">{t(item.labelKey)}</span>

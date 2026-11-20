@@ -21,7 +21,7 @@ interface FindBarProps {
   onClose: () => void
   /** Whether the replace row is visible (opened via Ctrl+H). */
   replaceOpen: boolean
-  onToggleReplace: () => void
+  onToggleReplace?: () => void
   /** Applies replaced text in source mode (updates the document state). */
   onSourceReplace: (text: string) => void
   /** A repeated Ctrl+F request seeded from the current editor selection. */
@@ -201,13 +201,15 @@ export function FindBar({
           flags={flags}
           onToggle={(key) => setFlags((prev) => ({ ...prev, [key]: !prev[key] }))}
         />
-        <button
-          className={'find-btn replace-toggle' + (replaceOpen ? ' active' : '')}
-          onClick={onToggleReplace}
-          title={t('find.replaceToggle')}
-        >
-          ⇄
-        </button>
+        {onToggleReplace && (
+          <button
+            className={'find-btn replace-toggle' + (replaceOpen ? ' active' : '')}
+            onClick={onToggleReplace}
+            title={t('find.replaceToggle')}
+          >
+            ⇄
+          </button>
+        )}
         <span className="find-count">{countLabel}</span>
         <button className="find-btn" onClick={() => selectAt(current - 1, true)} title={t('find.prev')}>
           ▲

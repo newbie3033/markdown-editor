@@ -5,6 +5,7 @@ import { checkForUpdates } from './update'
 
 let getWindowRef: () => BrowserWindow | null = () => null
 let readOnlyMode = false
+let defaultReadOnly = false
 let mermaidStyle = DEFAULT_MERMAID_STYLE
 
 function send(action: MenuAction, win: BrowserWindow | BaseWindow | null | undefined): void {
@@ -16,6 +17,12 @@ function send(action: MenuAction, win: BrowserWindow | BaseWindow | null | undef
 export function setReadOnlyMode(value: boolean): void {
   if (readOnlyMode === value) return
   readOnlyMode = value
+  rebuildMenu()
+}
+
+export function setDefaultReadOnly(value: boolean): void {
+  if (defaultReadOnly === value) return
+  defaultReadOnly = value
   rebuildMenu()
 }
 
@@ -95,7 +102,7 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
         { role: 'selectAll', label: t('menu.selectAll') },
         { type: 'separator' },
         { label: t('menu.find'), accelerator: `${modifier}+F`, click: (_i, w) => send('find', w ?? getWindowRef()) },
-        { label: t('menu.replace'), accelerator: `${modifier}+H`, click: (_i, w) => send('replace', w ?? getWindowRef()) }
+        { label: t('menu.replace'), accelerator: `${modifier}+H`, enabled: !readOnlyMode, click: (_i, w) => send('replace', w ?? getWindowRef()) }
       ]
     },
     {
@@ -154,10 +161,31 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
           }))
         },
         {
+          id: 'read-only-mode',
           label: t('menu.readOnlyMode'),
           type: 'checkbox',
           checked: readOnlyMode,
           click: (item, w) => send(item.checked ? 'mode-readonly' : 'mode-edit', w ?? getWindowRef())
+        },
+        {
+          id: 'default-mode',
+          label: t('menu.defaultMode'),
+          submenu: [
+            {
+              id: 'default-mode-edit',
+              label: t('menu.editMode'),
+              type: 'radio',
+              checked: !defaultReadOnly,
+              click: (_item, win) => send('default-mode-edit', win ?? getWindowRef())
+            },
+            {
+              id: 'default-mode-readonly',
+              label: t('menu.readOnlyMode'),
+              type: 'radio',
+              checked: defaultReadOnly,
+              click: (_item, win) => send('default-mode-readonly', win ?? getWindowRef())
+            }
+          ]
         },
         {
           label: t('menu.language'),

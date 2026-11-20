@@ -51,7 +51,7 @@ import {
   type WriteFileResult
 } from '../shared/ipc'
 import { getLocale, setLocale, t } from './i18n'
-import { activateAppMenu, getAppMenu, rebuildMenu, setMermaidStyle, setReadOnlyMode } from './menu'
+import { activateAppMenu, getAppMenu, rebuildMenu, setDefaultReadOnly, setMermaidStyle, setReadOnlyMode } from './menu'
 
 const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown', '.mdown', '.mkd', '.mdwn', '.txt'])
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.avif'])
@@ -1956,6 +1956,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   handle(IPC.setReadOnly, async (_event, value: boolean): Promise<void> => {
     setReadOnlyMode(value)
+  })
+
+  handle(IPC.setDefaultReadOnly, (_event, value: unknown) => {
+    if (typeof value === 'boolean') setDefaultReadOnly(value)
   })
 
   handle(IPC.getLocale, () => getLocale())

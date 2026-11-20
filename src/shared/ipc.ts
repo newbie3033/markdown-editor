@@ -245,6 +245,8 @@ export type MenuAction =
   | 'lang-zh'
   | 'mode-edit'
   | 'mode-readonly'
+  | 'default-mode-edit'
+  | 'default-mode-readonly'
   | 'zoom-in'
   | 'zoom-out'
   | 'zoom-reset'
@@ -290,6 +292,7 @@ export const IPC = {
   setZoom: 'app:set-zoom',
   showAbout: 'app:show-about',
   setReadOnly: 'app:set-read-only',
+  setDefaultReadOnly: 'app:set-default-read-only',
   getLocale: 'app:get-locale',
   getAppMenu: 'app:get-menu',
   appMenuUpdated: 'app:menu-updated',
@@ -359,6 +362,7 @@ export interface InkMarkApi {
   setZoom(level: number): Promise<void>
   showAbout(): Promise<void>
   setReadOnly(value: boolean): Promise<void>
+  setDefaultReadOnly(value: boolean): Promise<void>
   copyText(text: string): Promise<void>
   readClipboardText(): Promise<string>
   loadRecoveryDraft(): Promise<RecoveryDraft | null>

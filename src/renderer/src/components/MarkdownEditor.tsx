@@ -149,6 +149,7 @@ function InnerEditor({
             headingIdFromText(textWithoutHtmlComments(node))
           )
           ctx.set(editorViewOptionsCtx, {
+            editable: () => !isReadOnlyRef.current(),
             attributes: {
               class: 'md-body',
               spellcheck: 'false'

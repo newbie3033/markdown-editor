@@ -1,6 +1,6 @@
 import type { Node as ProseNode } from '@milkdown/prose/model'
-import { Plugin, PluginKey } from '@milkdown/prose/state'
-import type { ViewMutationRecord } from '@milkdown/prose/view'
+import { NodeSelection, Plugin, PluginKey } from '@milkdown/prose/state'
+import type { EditorView, ViewMutationRecord } from '@milkdown/prose/view'
 import { $prose } from '@milkdown/utils'
 import { tStatic } from './i18n'
 import { diagramPng } from './diagramPng'
@@ -8,6 +8,7 @@ import { renderMath } from './math'
 import { getMermaidStyle, mermaidBackground, mermaidConfig, type DiagramTheme } from './mermaidTheme'
 
 export const TOGGLE_PREVIEW_SOURCE_EVENT = 'inkmark-toggle-preview-source'
+export const DELETE_MERMAID_EVENT = 'inkmark-delete-mermaid'
 
 const MERMAID_LANGUAGES = new Set([
   'mermaid',
@@ -163,7 +164,11 @@ class CodeBlockView {
   private sourceVisible = false
   private readonly themeObserver: MutationObserver
 
-  constructor(node: ProseNode) {
+  constructor(
+    node: ProseNode,
+    private readonly view: EditorView,
+    private readonly getPos: () => number | undefined
+  ) {
     this.node = node
 
     this.dom = document.createElement('div')
@@ -178,6 +183,7 @@ class CodeBlockView {
     this.preview.className = 'diagram-preview'
     this.preview.hidden = true
     this.preview.setAttribute('contenteditable', 'false')
+    this.preview.addEventListener('click', this.selectMermaid)
     this.dom.appendChild(this.preview)
 
     this.button = document.createElement('button')
@@ -200,9 +206,31 @@ class CodeBlockView {
     tools.append(this.button, this.savePngButton)
     this.dom.prepend(tools)
     this.dom.addEventListener(TOGGLE_PREVIEW_SOURCE_EVENT, this.togglePreviewSource)
+    this.dom.addEventListener(DELETE_MERMAID_EVENT, this.deleteMermaid)
 
     this.themeObserver = new MutationObserver(() => this.renderPreview())
     this.renderPreview()
+  }
+
+  private readonly selectMermaid = (event: MouseEvent): void => {
+    if (event.button !== 0 || (event.target instanceof Element && event.target.closest('a'))) return
+    const pos = this.editableMermaidPosition()
+    if (pos === undefined) return
+    const { state } = this.view
+    const selection = NodeSelection.create(state.doc, pos)
+    this.view.dispatch(state.tr.setSelection(selection))
+    this.view.focus()
+  }
+
+  private readonly deleteMermaid = (): void => {
+    const pos = this.editableMermaidPosition()
+    if (pos === undefined) return
+    this.view.dispatch(this.view.state.tr.delete(pos, pos + this.node.nodeSize).scrollIntoView())
+    this.view.focus()
+  }
+
+  private editableMermaidPosition(): number | undefined {
+    if (this.view.editable && this.dom.dataset.previewKind === 'mermaid') return this.getPos()
   }
 
   private readonly togglePreviewSource = (): void => {
@@ -344,7 +372,9 @@ class CodeBlockView {
     if (this.previewTimer) clearTimeout(this.previewTimer)
     this.previewGeneration += 1
     this.themeObserver.disconnect()
+    this.preview.removeEventListener('click', this.selectMermaid)
     this.dom.removeEventListener(TOGGLE_PREVIEW_SOURCE_EVENT, this.togglePreviewSource)
+    this.dom.removeEventListener(DELETE_MERMAID_EVENT, this.deleteMermaid)
   }
 }
 
@@ -355,7 +385,7 @@ export const codeBlockCopyPlugin = $prose(
       key: new PluginKey('CODE_BLOCK_COPY'),
       props: {
         nodeViews: {
-          code_block: (node: ProseNode) => new CodeBlockView(node)
+          code_block: (node, view, getPos) => new CodeBlockView(node, view, getPos)
         }
       }
     })

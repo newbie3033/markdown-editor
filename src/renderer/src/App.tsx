@@ -31,7 +31,7 @@ import {
   type OutlineItem
 } from './lib/markdown'
 import { useI18n, welcomeMarkdown } from './lib/i18n'
-import { TOGGLE_PREVIEW_SOURCE_EVENT } from './lib/codeBlockCopy'
+import { DELETE_MERMAID_EVENT, TOGGLE_PREVIEW_SOURCE_EVENT } from './lib/codeBlockCopy'
 import { normalizeDisplayMath } from './lib/math'
 
 type SaveOutcome = 'saved' | 'canceled' | 'failed' | 'stale'
@@ -65,7 +65,8 @@ export default function App(): React.JSX.Element {
     text: string
   } | null>(null)
   const [replaceOpen, setReplaceOpen] = useState(false)
-  const [readOnly, setReadOnly] = useState(false)
+  const [defaultReadOnly, setDefaultReadOnly] = usePersistentBoolean('inkmark.defaultReadOnly', false)
+  const [readOnly, setReadOnly] = useState(defaultReadOnly)
   const [mermaidStyle, setMermaidStyle] = useState(() => {
     const saved = localStorage.getItem('inkmark.mermaidStyle')
     return isMermaidStyle(saved) ? saved : DEFAULT_MERMAID_STYLE
@@ -79,6 +80,7 @@ export default function App(): React.JSX.Element {
     x: number
     y: number
     previewSourceTarget: HTMLElement | null
+    readOnlySelection?: string
   } | null>(null)
   const [zoomLevel, setZoomLevel] = useState(0)
   const [recoveryReady, setRecoveryReady] = useState(false)
@@ -221,6 +223,14 @@ export default function App(): React.JSX.Element {
   }, [theme])
 
   useEffect(() => {
+    void window.api.setDefaultReadOnly(defaultReadOnly)
+  }, [defaultReadOnly])
+
+  useEffect(() => {
+    void window.api.setReadOnly(readOnly)
+  }, [readOnly])
+
+  useEffect(() => {
     document.title = `${dirty ? '● ' : ''}${title}${readOnly ? t('status.readOnlySuffix') : ''} — InkMark`
     document.documentElement.style.setProperty('--editor-placeholder', `"${t('editor.placeholder')}"`)
   }, [dirty, title, readOnly, t])
@@ -264,11 +274,12 @@ export default function App(): React.JSX.Element {
         sourceModeRef.current = false
         setSourceMode(false)
       }
+      setCtxMenu(null)
+      if (value) setReplaceOpen(false)
       setReadOnly(value)
       editorRef.current?.action((ctx) => {
         ctx.get(editorViewCtx).setProps({ editable: () => !value })
       })
-      void window.api.setReadOnly(value)
     },
     [sourceMode]
   )
@@ -966,6 +977,7 @@ export default function App(): React.JSX.Element {
           setFindOpen(true)
           break
         case 'replace':
+          if (readOnlyRef.current) break
           if (!findOpen) setFindQueryRequest(null)
           setFindOpen(true)
           setReplaceOpen(true)
@@ -1033,6 +1045,12 @@ export default function App(): React.JSX.Element {
         case 'mode-edit':
           setReadOnlyMode(false)
           break
+        case 'default-mode-edit':
+          setDefaultReadOnly(false)
+          break
+        case 'default-mode-readonly':
+          setDefaultReadOnly(true)
+          break
         case 'about':
           void window.api.showAbout()
           break
@@ -1064,6 +1082,7 @@ export default function App(): React.JSX.Element {
       toggleSourceMode,
       applyZoom,
       setReadOnlyMode,
+      setDefaultReadOnly,
       setLang,
       showSidebar,
       sidebarTab,
@@ -1161,12 +1180,36 @@ export default function App(): React.JSX.Element {
 
   const onEditorContextMenu = useCallback(
     (event: React.MouseEvent) => {
-      if (sourceMode || readOnly) return
+      const position = { x: event.clientX, y: event.clientY }
+      if (readOnly) {
+        if (sourceMode) {
+          const textarea = textareaRef.current
+          if (!textarea || event.target !== textarea) return
+
+          event.preventDefault()
+          const readOnlySelection = textarea.value.slice(textarea.selectionStart, textarea.selectionEnd)
+          setCtxMenu({ ...position, previewSourceTarget: null, readOnlySelection })
+          return
+        }
+        const editorDom = editorRef.current?.action((ctx) => ctx.get(editorViewCtx).dom)
+        if (!editorDom?.contains(event.target as Node)) return
+
+        event.preventDefault()
+        // Read-only text selection lives in the DOM and may differ from the editor state.
+        const selection = window.getSelection()
+        const readOnlySelection = selection &&
+          editorDom.contains(selection.anchorNode) && editorDom.contains(selection.focusNode)
+          ? selection.toString()
+          : ''
+        setCtxMenu({ ...position, previewSourceTarget: null, readOnlySelection })
+        return
+      }
+      if (sourceMode) return
       event.preventDefault()
       const target = event.target instanceof Element
         ? event.target.closest<HTMLElement>('.code-block-wrap[data-preview-kind]')
         : null
-      setCtxMenu({ x: event.clientX, y: event.clientY, previewSourceTarget: target })
+      setCtxMenu({ ...position, previewSourceTarget: target })
     },
     [sourceMode, readOnly]
   )
@@ -1295,8 +1338,8 @@ export default function App(): React.JSX.Element {
             sourceMode={sourceMode}
             sourceText={markdown}
             textareaRef={textareaRef}
-            replaceOpen={replaceOpen}
-            onToggleReplace={() => setReplaceOpen((v) => !v)}
+            replaceOpen={!readOnly && replaceOpen}
+            onToggleReplace={readOnly ? undefined : () => setReplaceOpen((v) => !v)}
             onSourceReplace={(text) => {
               markdownRef.current = text
               setMarkdown(text)
@@ -1340,6 +1383,7 @@ export default function App(): React.JSX.Element {
               ref={textareaRef}
               className="source-editor"
               value={markdown}
+              readOnly={readOnly}
               onChange={(event) => {
                 const value = event.target.value
                 markdownRef.current = value
@@ -1388,11 +1432,15 @@ export default function App(): React.JSX.Element {
             x={ctxMenu.x}
             y={ctxMenu.y}
             editor={editorRef.current}
+            readOnlySelection={ctxMenu.readOnlySelection}
             showPreviewSourceToggle={Boolean(ctxMenu.previewSourceTarget)}
             previewSourceVisible={ctxMenu.previewSourceTarget?.dataset.sourceVisible === 'true'}
             onTogglePreviewSource={() => {
               ctxMenu.previewSourceTarget?.dispatchEvent(new Event(TOGGLE_PREVIEW_SOURCE_EVENT))
             }}
+            onDeleteMermaid={ctxMenu.previewSourceTarget?.dataset.previewKind === 'mermaid' ? () => {
+              ctxMenu.previewSourceTarget?.dispatchEvent(new Event(DELETE_MERMAID_EVENT))
+            } : undefined}
             ensureDocPath={ensureDocumentPath}
             onImageError={(error) => {
               void reportSaveError(t('error.imageFailed'), error)
