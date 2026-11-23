@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, net, shell } from 'electron'
 import { IPC, RELEASES_URL, REPOSITORY_URL, type UpdateInfo } from '../shared/ipc'
 import { t } from './i18n'
+import { readSettings } from './settings'
 
 const LATEST_RELEASE_API_URL =
   'https://api.github.com/repos/newbie3033/markdown-editor/releases/latest'
@@ -238,7 +239,7 @@ async function runUpdateCheck(win: BrowserWindow, automatic: boolean): Promise<v
  * Automatic checks stay silent unless a newer version is available.
  */
 export function checkForUpdates(win: BrowserWindow, automatic: boolean): Promise<void> {
-  if (automatic && automaticCheckStarted) return Promise.resolve()
+  if (automatic && (automaticCheckStarted || !automaticUpdateChecksEnabled())) return Promise.resolve()
   const activeCheck = activeChecks.get(win)
   if (activeCheck) return activeCheck
   if (automatic) automaticCheckStarted = true
@@ -247,4 +248,8 @@ export function checkForUpdates(win: BrowserWindow, automatic: boolean): Promise
   })
   activeChecks.set(win, check)
   return check
+}
+
+export function automaticUpdateChecksEnabled(): boolean {
+  return readSettings().checkUpdatesOnStartup !== false
 }

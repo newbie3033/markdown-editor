@@ -199,8 +199,9 @@ git tag v1.0.2
 git push origin v1.0.2
 ```
 
-On packaged builds, InkMark checks GitHub Releases at startup. When a newer
-version is available, InkMark shows its version number, release notes, and a
+On packaged builds, InkMark checks GitHub Releases at startup by default.
+Use *Help → Automatically Check for Updates on Startup* to toggle this check.
+When a newer version is available, InkMark shows its version number, release notes, and a
 dropdown with all published installation packages. The package for the current
 system and architecture is selected when available. **Download** opens the
 chosen package's direct download link in the system browser, which handles

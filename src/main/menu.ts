@@ -1,6 +1,8 @@
 import { BaseWindow, BrowserWindow, Menu, MenuItemConstructorOptions, nativeTheme, shell } from 'electron'
 import { DEFAULT_MERMAID_STYLE, IPC, MERMAID_STYLES, REPOSITORY_URL, type AppMenuItem, type Lang, type MenuAction, type MermaidStyle } from '../shared/ipc'
 import { getLocale, t } from './i18n'
+import { writeSettings } from './settings'
+import { automaticUpdateChecksEnabled } from './update'
 
 let getWindowRef: () => BrowserWindow | null = () => null
 let requestUpdateCheck: () => void
@@ -238,6 +240,20 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
         {
           label: t('menu.checkForUpdates'),
           click: () => requestUpdateCheck()
+        },
+        {
+          id: 'check-updates-on-startup',
+          label: t('menu.checkUpdatesOnStartup'),
+          type: 'checkbox',
+          checked: automaticUpdateChecksEnabled(),
+          click: item => {
+            try {
+              writeSettings({ checkUpdatesOnStartup: item.checked })
+            } catch (error) {
+              console.warn('Could not save the automatic update check setting', error)
+            }
+            rebuildMenu()
+          }
         },
         { type: 'separator' },
         {
