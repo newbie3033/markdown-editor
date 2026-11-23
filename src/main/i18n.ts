@@ -1,7 +1,6 @@
 import { app } from 'electron'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import type { Lang } from '../shared/ipc'
+import { readSettings, writeSettings } from './settings'
 
 const messages = {
   en: {
@@ -49,6 +48,7 @@ const messages = {
     'menu.toggleDevTools': 'Toggle Developer Tools',
     'menu.help': 'Help',
     'menu.checkForUpdates': 'Check for Updates…',
+    'menu.checkUpdatesOnStartup': 'Automatically Check for Updates on Startup',
     'menu.about': 'About InkMark',
     'menu.editMode': 'Edit Mode',
     'menu.readOnlyMode': 'Read-only Mode',
@@ -151,6 +151,7 @@ const messages = {
     'menu.toggleDevTools': '切换开发者工具',
     'menu.help': '帮助',
     'menu.checkForUpdates': '检查更新…',
+    'menu.checkUpdatesOnStartup': '启动时自动检查更新',
     'menu.about': '关于 InkMark',
     'menu.editMode': '编辑模式',
     'menu.readOnlyMode': '只读模式',
@@ -215,26 +216,14 @@ export type MessageKey = keyof (typeof messages)['en']
 let currentLocale: Lang = 'en'
 let onLocaleChanged: (() => void) | null = null
 
-function settingsPath(): string {
-  return join(app.getPath('userData'), 'settings.json')
-}
-
 function systemLocale(): Lang {
   const locale = app.getLocale() ?? 'en'
   return locale.toLowerCase().startsWith('zh') ? 'zh' : 'en'
 }
 
 function loadLocale(): Lang {
-  try {
-    const file = settingsPath()
-    if (existsSync(file)) {
-      const parsed = JSON.parse(readFileSync(file, 'utf8')) as { locale?: unknown }
-      if (parsed.locale === 'en' || parsed.locale === 'zh') return parsed.locale
-    }
-  } catch {
-    // Ignore malformed settings and fall back to the system locale.
-  }
-  return systemLocale()
+  const { locale } = readSettings()
+  return locale === 'en' || locale === 'zh' ? locale : systemLocale()
 }
 
 export function initLocale(onChange: () => void): Lang {
@@ -251,9 +240,7 @@ export function setLocale(lang: Lang): void {
   if (lang !== 'en' && lang !== 'zh') return
   currentLocale = lang
   try {
-    const file = settingsPath()
-    const existing = existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as object) : {}
-    writeFileSync(file, JSON.stringify({ ...existing, locale: lang }, null, 2), 'utf8')
+    writeSettings({ locale: lang })
   } catch {
     // Persisting settings is best-effort.
   }
