@@ -3,7 +3,7 @@ import { useI18n } from '../lib/i18n'
 
 interface OutlineProps {
   items: OutlineItem[]
-  onNavigate: (id: string) => void
+  onNavigate: (pos: number) => void
 }
 
 export function Outline({ items, onNavigate }: OutlineProps): React.JSX.Element {
@@ -13,12 +13,12 @@ export function Outline({ items, onNavigate }: OutlineProps): React.JSX.Element 
   }
   return (
     <div className="outline">
-      {items.map((item, index) => (
+      {items.map((item) => (
         <button
-          key={`${item.id}-${index}`}
+          key={item.pos}
           className="outline-item"
           style={{ paddingLeft: 8 + (item.level - 1) * 14 }}
-          onClick={() => onNavigate(item.id)}
+          onClick={() => onNavigate(item.pos)}
           title={item.text}
         >
           <span className={`outline-bullet h${item.level}`}>H{item.level}</span>

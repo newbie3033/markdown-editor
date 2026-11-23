@@ -1,7 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { editorViewCtx, parserCtx, serializerCtx, type Editor } from '@milkdown/kit/core'
+import { editorViewCtx, parserCtx, remarkCtx, serializerCtx, type Editor } from '@milkdown/kit/core'
 import { DOMSerializer, type Node as ProseMirrorNode } from '@milkdown/prose/model'
 import { AllSelection } from '@milkdown/prose/state'
+import type { RemarkParser } from '@milkdown/kit/transformer'
 import { getMarkdown, getHTML, replaceAll as replaceAllRaw } from '@milkdown/kit/utils'
 import { DEFAULT_MERMAID_STYLE, isMermaidStyle, type FileVersion, type MenuAction, type SearchFlags, type ThemePreference } from '../../shared/ipc'
 const MarkdownEditor = lazy(() =>
@@ -34,6 +35,7 @@ import { useI18n, welcomeMarkdown } from './lib/i18n'
 import { DELETE_MERMAID_EVENT, TOGGLE_PREVIEW_SOURCE_EVENT } from './lib/codeBlockCopy'
 import { normalizeDisplayMath } from './lib/math'
 import { normalizeTextareaLineEndings, preserveMarkdownSource } from './lib/markdownSource'
+import { jumpToSourceHeading, sourceOutline } from './lib/sourceOutline'
 
 type SaveOutcome = 'saved' | 'canceled' | 'failed' | 'stale'
 
@@ -74,6 +76,7 @@ export default function App(): React.JSX.Element {
     return saved === 'dark' || saved === 'light' ? saved : 'system'
   })
   const [outline, setOutline] = useState<OutlineItem[]>([])
+  const [sourceParser, setSourceParser] = useState<RemarkParser | null>(null)
   const [ctxMenu, setCtxMenu] = useState<{
     x: number
     y: number
@@ -127,6 +130,11 @@ export default function App(): React.JSX.Element {
   const recoveryErrorShownRef = useRef(false)
 
   const stats = useMemo(() => computeStats(markdown), [markdown])
+  const sourceText = useMemo(() => normalizeTextareaLineEndings(markdown), [markdown])
+  const activeOutline = useMemo(() => {
+    if (!sourceMode || !showOutline) return outline
+    return sourceParser ? sourceOutline(sourceParser, sourceText) : []
+  }, [outline, showOutline, sourceMode, sourceParser, sourceText])
   const title = fileNameFromPath(filePath) || t('status.untitled')
 
   const updateMarkdown = useCallback((content: string) => {
@@ -447,6 +455,8 @@ export default function App(): React.JSX.Element {
 
   const handleEditorReady = useCallback((editor: Editor) => {
     editorRef.current = editor
+    const parser = editor.action((ctx) => ctx.get(remarkCtx))
+    setSourceParser(() => parser)
     syncVisualEditor(pendingContentRef.current ?? markdownRef.current)
   }, [syncVisualEditor])
 
@@ -875,20 +885,18 @@ export default function App(): React.JSX.Element {
     }
   }, [])
 
-  const navigateOutline = useCallback((id: string) => {
-    const el = document.getElementById(id)
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  const navigateOutline = useCallback((pos: number) => {
+    if (sourceModeRef.current) {
+      const textarea = textareaRef.current
+      if (textarea) jumpToSourceHeading(textarea, pos)
       return
     }
-    // Fallback: find heading by its text content.
-    const editorDom = document.querySelector('.milkdown .ProseMirror')
-    if (editorDom) {
-      const heading = Array.from(editorDom.querySelectorAll('h1,h2,h3,h4,h5,h6')).find(
-        (h) => h.id === id || h.textContent?.trim() === id
-      )
-      heading?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }
+    editorRef.current?.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      if (pos >= view.state.doc.content.size || view.state.doc.nodeAt(pos)?.type.name !== 'heading') return
+      const heading = view.nodeDOM(pos)
+      if (heading instanceof HTMLElement) heading.scrollIntoView({ behavior: 'instant', block: 'start' })
+    })
   }, [])
 
   const toggleSourceMode = useCallback(() => {
@@ -1325,7 +1333,7 @@ export default function App(): React.JSX.Element {
           <FindBar
             getEditor={getEditor}
             sourceMode={sourceMode}
-            sourceText={normalizeTextareaLineEndings(markdown)}
+            sourceText={sourceText}
             textareaRef={textareaRef}
             replaceOpen={!readOnly && replaceOpen}
             onToggleReplace={readOnly ? undefined : () => setReplaceOpen((v) => !v)}
@@ -1366,7 +1374,7 @@ export default function App(): React.JSX.Element {
             <textarea
               ref={textareaRef}
               className="source-editor"
-              value={markdown}
+              value={sourceText}
               readOnly={readOnly}
               onChange={(event) => updateTextareaContent(event.target.value)}
               spellCheck={false}
@@ -1378,7 +1386,7 @@ export default function App(): React.JSX.Element {
 
       {showOutline && (
         <OutlinePanel
-          outline={outline}
+          outline={activeOutline}
           onNavigate={navigateOutline}
           width={outlineSidebar.width}
           onResizeStart={outlineSidebar.startResize}

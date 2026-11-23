@@ -1779,6 +1779,13 @@ li.ProseMirror-selectednode::after {
   justify-content: flex-end;
   margin-bottom: 4px;
 }
+.diagram-edit-btn {
+  display: none;
+}
+.ProseMirror[contenteditable='true'] .code-block-wrap[data-preview-kind='mermaid'] .diagram-edit-btn {
+  display: block;
+}
+.diagram-edit-btn,
 .diagram-png-btn,
 .code-copy-btn {
   font-size: 11px;
@@ -1792,11 +1799,11 @@ li.ProseMirror-selectednode::after {
   transition: opacity 0.15s ease, color 0.15s ease;
   cursor: pointer;
 }
-.code-block-wrap:hover :is(.code-copy-btn, .diagram-png-btn),
-:is(.code-copy-btn, .diagram-png-btn):focus-visible {
+.code-block-wrap:hover :is(.code-copy-btn, .diagram-png-btn, .diagram-edit-btn),
+:is(.code-copy-btn, .diagram-png-btn, .diagram-edit-btn):focus-visible {
   opacity: 1;
 }
-:is(.code-copy-btn, .diagram-png-btn):hover {
+:is(.code-copy-btn, .diagram-png-btn, .diagram-edit-btn):hover {
   color: var(--text);
   background: var(--bg-hover);
 }

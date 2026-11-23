@@ -1,7 +1,7 @@
 export interface OutlineItem {
   text: string
   level: number
-  id: string
+  pos: number
 }
 
 export interface DocStats {

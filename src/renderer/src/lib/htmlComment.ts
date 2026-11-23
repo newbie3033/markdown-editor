@@ -7,6 +7,7 @@ import {
   type Transaction
 } from '@milkdown/kit/prose/state'
 import { $inputRule, $nodeSchema, $prose, $remark, $useKeymap } from '@milkdown/kit/utils'
+import type { OutlineItem } from './markdown'
 
 interface MarkdownAstNode {
   type: string
@@ -175,18 +176,14 @@ export function textWithoutHtmlComments(node: ProseMirrorNode): string {
   return text
 }
 
-export function outlineWithoutHtmlComments(doc: ProseMirrorNode): Array<{
-  text: string
-  level: number
-  id: string
-}> {
-  const result: Array<{ text: string; level: number; id: string }> = []
-  doc.descendants((node) => {
+export function outlineWithoutHtmlComments(doc: ProseMirrorNode): OutlineItem[] {
+  const result: OutlineItem[] = []
+  doc.descendants((node, pos) => {
     if (node.type.name === 'heading' && typeof node.attrs.level === 'number') {
       result.push({
         text: textWithoutHtmlComments(node).trim(),
         level: node.attrs.level,
-        id: String(node.attrs.id ?? '')
+        pos
       })
       return false
     }
