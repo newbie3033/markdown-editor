@@ -944,10 +944,78 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     }
     win.webContents.send(IPC.menuAction, 'mermaid-style-soft')
 
+    // Force Chromium's hover state without scrolling or relying on the OS pointer.
+    const debuggerSession = win.webContents.debugger
+    debuggerSession.attach()
+    try {
+      await debuggerSession.sendCommand('DOM.enable')
+      await debuggerSession.sendCommand('CSS.enable')
+      const { root } = await debuggerSession.sendCommand('DOM.getDocument')
+      const { nodeIds } = await debuggerSession.sendCommand('DOM.querySelectorAll', {
+        nodeId: root.nodeId, selector: '.code-block-wrap[data-preview-kind="mermaid"]'
+      })
+      await debuggerSession.sendCommand('CSS.forcePseudoState', { nodeId: nodeIds[1], forcedPseudoClasses: ['hover'] })
+      const hoverState = (await js(`(() => {
+        const sequence = document.querySelectorAll('.code-block-wrap[data-preview-kind="mermaid"]')[1]
+        const buttons = [...sequence.querySelectorAll('.diagram-edit-btn, .code-copy-btn')]
+        for (const button of buttons) {
+          getComputedStyle(button).opacity
+          for (const animation of button.getAnimations()) animation.finish()
+        }
+        return { opacities: buttons.map(button => getComputedStyle(button).opacity),
+          selected: sequence.classList.contains('ProseMirror-selectednode') }
+      })()`)) as { opacities: string[]; selected: boolean }
+      check('hovering an unselected Mermaid diagram shows Copy and Edit source',
+        !hoverState.selected && hoverState.opacities.join(',') === '1,1', JSON.stringify(hoverState))
+    } finally {
+      debuggerSession.detach()
+    }
+    const sourceFocused = (await js(`(() => {
+      const [flow, sequence] = document.querySelectorAll('.code-block-wrap[data-preview-kind="mermaid"]')
+      const button = sequence?.querySelector('.diagram-edit-btn')
+      if (!button || sequence.classList.contains('ProseMirror-selectednode')) return false
+      button.click()
+      return sequence.dataset.sourceVisible === 'true' && flow?.dataset.sourceVisible === 'false' &&
+        sequence.querySelector('code').contains(window.getSelection().anchorNode)
+    })()`)) === true
+    if (sourceFocused) await win.webContents.insertText(' updated')
+    const sourceUpdated = sourceFocused && (await js(`(async () => {
+      for (let i = 0; i < 40; i += 1) {
+        const sequence = document.querySelectorAll('.mermaid-preview')[1]
+        if (window.__inkmarkGetMarkdown().includes('Server-->>Client: Response updated') &&
+            sequence?.querySelector('svg')?.textContent.includes('Response updated')) return true
+        await new Promise(resolve => setTimeout(resolve, 250))
+      }
+      return false
+    })()`)) === true
+    check('editing an unselected Mermaid diagram updates its source and preview', sourceUpdated)
+
+    const finishedByButton = (await js(`(() => {
+      const sequence = document.querySelectorAll('.code-block-wrap[data-preview-kind="mermaid"]')[1]
+      const button = sequence?.querySelector('.diagram-edit-btn')
+      if (sequence?.dataset.sourceVisible !== 'true' || button?.textContent !== '完成编辑') return false
+      button.click()
+      const closed = getComputedStyle(sequence.querySelector('pre')).display === 'none' &&
+        button.textContent === '编辑源码' && sequence.classList.contains('ProseMirror-selectednode')
+      button.click()
+      return closed && sequence.dataset.sourceVisible === 'true'
+    })()`)) === true
+    check('Mermaid Done editing closes the source and allows reopening', finishedByButton)
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
+    const finishedByEscape = (await js(`(() => {
+      const sequence = document.querySelectorAll('.code-block-wrap[data-preview-kind="mermaid"]')[1]
+      return getComputedStyle(sequence.querySelector('pre')).display === 'none' &&
+        sequence.classList.contains('ProseMirror-selectednode') &&
+        window.__inkmarkGetMarkdown().includes('Server-->>Client: Response updated')
+    })()`)) === true
+    check('Escape exits Mermaid source editing and preserves the changes', finishedByEscape)
+
     const selectedDiagram = (await js(`(() => {
       const preview = document.querySelector('.mermaid-preview')
       preview?.click()
-      return preview?.parentElement.classList.contains('ProseMirror-selectednode')
+      return preview?.parentElement.classList.contains('ProseMirror-selectednode') &&
+        preview.parentElement.dataset.sourceVisible === 'false'
     })()`)) === true
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Delete' })
     win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Delete' })
@@ -957,6 +1025,8 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       !afterDiagramDelete.includes('flowchart LR') && afterDiagramDelete.includes('sequenceDiagram') &&
       afterDiagramDelete.includes('Paragraph after diagrams.'))
 
+    await js(`document.querySelector('.editor-scroll').scrollTo({ behavior: 'instant', top: 0 })`)
+    await sleep(150)
     const diagramMenuDeleted = (await js(`(async () => {
       const previews = document.querySelectorAll('.mermaid-preview')
       previews[previews.length - 1]?.dispatchEvent(new MouseEvent('contextmenu', {
@@ -1640,6 +1710,82 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     await sleep(400)
     const ro3 = (await js(`document.querySelector('.ProseMirror')?.getAttribute('contenteditable')`)) as string | null
     check('mode-edit restores editing', ro3 === 'true', String(ro3))
+
+    const outlinePadding = 'Paragraph between headings.\n\n'.repeat(80)
+    await fs.writeFile(join(TEST_DIR, 'docs', 'outline-test.md'),
+      `# 同名标题 <!-- first -->\n\n${'😀 Wrapped source line. '.repeat(100)}\n\n${outlinePadding}# 同名标题 <!-- second -->\n\n${outlinePadding}`
+        .replaceAll('\n', '\r\n'))
+    win.webContents.send(IPC.openPath, `${TEST_DIR}/docs/outline-test.md`)
+    const outlineNavigation = (await js(`(async () => {
+      const waitFor = async (condition) => {
+        for (let i = 0; i < 60; i += 1) {
+          if (condition()) return true
+          await new Promise(resolve => setTimeout(resolve, 50))
+        }
+        return false
+      }
+      if (!await waitFor(() => document.querySelectorAll('.outline-item[title="同名标题"]').length === 2)) return null
+      const items = document.querySelectorAll('.outline-item[title="同名标题"]')
+      const headings = document.querySelectorAll('.ProseMirror h1')
+      const scroller = document.querySelector('.editor-scroll')
+      scroller.scrollTo({ behavior: 'instant', top: 0 })
+      const { top, bottom } = scroller.getBoundingClientRect()
+      const isVisible = (heading) => {
+        const rect = heading.getBoundingClientRect()
+        return rect.top >= top - 2 && rect.bottom <= bottom
+      }
+      const secondStartsOffscreen = !isVisible(headings[1])
+      items[1].click()
+      const reachedSecond = await waitFor(() => isVisible(headings[1]) && !isVisible(headings[0]))
+      items[0].click()
+      const reachedFirst = await waitFor(() => isVisible(headings[0]) && !isVisible(headings[1]))
+      return { secondStartsOffscreen, reachedSecond, reachedFirst }
+    })()`)) as { secondStartsOffscreen: boolean; reachedSecond: boolean; reachedFirst: boolean } | null
+    check('outline navigation scrolls to each of two same-name headings with comments',
+      outlineNavigation?.secondStartsOffscreen && outlineNavigation.reachedSecond && outlineNavigation.reachedFirst || false,
+      JSON.stringify(outlineNavigation))
+
+    win.webContents.send(IPC.menuAction, 'toggle-source')
+    await sleep(300)
+    const sourceNavigation = (await js(`(() => {
+      const textarea = document.querySelector('.source-editor')
+      const [first, second] = document.querySelectorAll('.outline-item[title="同名标题"]')
+      if (!textarea || !second) return null
+      const secondOffset = textarea.value.indexOf('# 同名标题 <!-- second -->')
+      second.click()
+      const scroll = textarea.scrollTop
+      const physicalLines = textarea.value.slice(0, secondOffset).split('\\n').length - 1
+      const wrapsIncluded = scroll > physicalLines * parseFloat(getComputedStyle(textarea).lineHeight)
+      const reachedSecond = document.activeElement === textarea && textarea.selectionStart === secondOffset &&
+        textarea.selectionEnd === secondOffset
+      first.click()
+      return { reachedSecond, wrapsIncluded, reachedFirst: textarea.selectionStart === 0 && textarea.scrollTop === 0 }
+    })()`)) as { reachedSecond: boolean; wrapsIncluded: boolean; reachedFirst: boolean } | null
+    check('source outline jumps to duplicate headings in CRLF Markdown and accounts for wrapped lines',
+      sourceNavigation?.reachedSecond === true && sourceNavigation.wrapsIncluded && sourceNavigation.reachedFirst,
+      JSON.stringify(sourceNavigation))
+
+    const sourceAddition = '\n```md\n# Fenced heading\n```\n\n<!--\n# Comment heading\n-->\n\n**实时标题**\n------------\n'
+    const liveSourceOutline = (await js(`(async () => {
+      const textarea = document.querySelector('.source-editor')
+      if (!textarea) return false
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set
+      setter.call(textarea, textarea.value + ${JSON.stringify(sourceAddition)})
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+      for (let i = 0; i < 20; i += 1) {
+        const target = document.querySelector('.outline-item[title="实时标题"]')
+        if (target) {
+          target.click()
+          return textarea.selectionStart === textarea.value.indexOf('**实时标题**') &&
+            document.querySelectorAll('.outline-item').length === 3
+        }
+        await new Promise(resolve => setTimeout(resolve, 50))
+      }
+      return false
+    })()`)) === true
+    check('source outline updates on edit, supports Setext headings, and ignores fenced code and comments', liveSourceOutline)
+    win.webContents.send(IPC.menuAction, 'toggle-source')
+    await sleep(300)
 
     // 13. Export HTML/PDF end to end (save dialogs stubbed).
     await fs.mkdir(join(TEST_DIR, 'docs', 'assets'), { recursive: true })

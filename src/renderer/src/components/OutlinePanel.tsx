@@ -4,7 +4,7 @@ import { Outline } from './Outline'
 
 interface OutlinePanelProps {
   outline: OutlineItem[]
-  onNavigate: (id: string) => void
+  onNavigate: (pos: number) => void
   width: number
   onResizeStart: (event: React.MouseEvent, direction: 1 | -1) => void
   onResetWidth: () => void

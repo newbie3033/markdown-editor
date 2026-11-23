@@ -1,5 +1,5 @@
 import type { Node as ProseNode } from '@milkdown/prose/model'
-import { NodeSelection, Plugin, PluginKey } from '@milkdown/prose/state'
+import { NodeSelection, Plugin, PluginKey, TextSelection } from '@milkdown/prose/state'
 import type { EditorView, ViewMutationRecord } from '@milkdown/prose/view'
 import { $prose } from '@milkdown/utils'
 import { tStatic } from './i18n'
@@ -9,6 +9,7 @@ import { getMermaidStyle, mermaidBackground, mermaidConfig, type DiagramTheme } 
 
 export const TOGGLE_PREVIEW_SOURCE_EVENT = 'inkmark-toggle-preview-source'
 export const DELETE_MERMAID_EVENT = 'inkmark-delete-mermaid'
+const FINISH_MERMAID_EDIT_EVENT = 'inkmark-finish-mermaid-edit'
 
 const MERMAID_LANGUAGES = new Set([
   'mermaid',
@@ -154,6 +155,7 @@ class CodeBlockView {
 
   private readonly button: HTMLButtonElement
   private readonly savePngButton: HTMLButtonElement
+  private readonly editSourceButton: HTMLButtonElement
   private savingPng = false
   private readonly source: HTMLPreElement
   private readonly preview: HTMLDivElement
@@ -200,13 +202,20 @@ class CodeBlockView {
     this.savePngButton.hidden = true
     this.savePngButton.addEventListener('mousedown', event => event.preventDefault())
     this.savePngButton.addEventListener('click', () => void this.savePng())
+    this.editSourceButton = document.createElement('button')
+    this.editSourceButton.type = 'button'
+    this.editSourceButton.className = 'diagram-edit-btn'
+    this.editSourceButton.textContent = tStatic('code.editSource')
+    this.editSourceButton.addEventListener('mousedown', event => event.preventDefault())
+    this.editSourceButton.addEventListener('click', this.toggleMermaidEdit)
     const tools = document.createElement('div')
     tools.className = 'code-block-tools'
     tools.contentEditable = 'false'
-    tools.append(this.button, this.savePngButton)
+    tools.append(this.editSourceButton, this.button, this.savePngButton)
     this.dom.prepend(tools)
     this.dom.addEventListener(TOGGLE_PREVIEW_SOURCE_EVENT, this.togglePreviewSource)
     this.dom.addEventListener(DELETE_MERMAID_EVENT, this.deleteMermaid)
+    this.dom.addEventListener(FINISH_MERMAID_EDIT_EVENT, this.finishMermaidSourceFromKeyboard)
 
     this.themeObserver = new MutationObserver(() => this.renderPreview())
     this.renderPreview()
@@ -216,6 +225,10 @@ class CodeBlockView {
     if (event.button !== 0 || (event.target instanceof Element && event.target.closest('a'))) return
     const pos = this.editableMermaidPosition()
     if (pos === undefined) return
+    this.selectMermaidAt(pos)
+  }
+
+  private selectMermaidAt(pos: number): void {
     const { state } = this.view
     const selection = NodeSelection.create(state.doc, pos)
     this.view.dispatch(state.tr.setSelection(selection))
@@ -229,6 +242,33 @@ class CodeBlockView {
     this.view.focus()
   }
 
+  private readonly toggleMermaidEdit = (): void => {
+    const pos = this.editableMermaidPosition()
+    if (pos === undefined) return
+    if (this.sourceVisible) {
+      this.finishMermaidSource(pos)
+      return
+    }
+    const { state } = this.view
+    this.togglePreviewSource()
+    const selection = TextSelection.create(state.doc, pos + 1 + this.node.content.size)
+    this.view.dispatch(state.tr.setSelection(selection).scrollIntoView())
+    this.view.focus()
+  }
+
+  private readonly finishMermaidSourceFromKeyboard = (event: Event): void => {
+    if (!this.sourceVisible) return
+    const pos = this.editableMermaidPosition()
+    if (pos === undefined) return
+    event.preventDefault()
+    this.finishMermaidSource(pos)
+  }
+
+  private finishMermaidSource(pos: number): void {
+    this.selectMermaidAt(pos)
+    this.togglePreviewSource()
+  }
+
   private editableMermaidPosition(): number | undefined {
     if (this.view.editable && this.dom.dataset.previewKind === 'mermaid') return this.getPos()
   }
@@ -237,6 +277,7 @@ class CodeBlockView {
     if (!this.dom.dataset.previewKind) return
     this.sourceVisible = !this.sourceVisible
     this.dom.dataset.sourceVisible = String(this.sourceVisible)
+    this.editSourceButton.textContent = tStatic(this.sourceVisible ? 'code.finishEditing' : 'code.editSource')
   }
 
   private setPreviewKind(kind: 'math' | 'mermaid' | null): void {
@@ -286,7 +327,7 @@ class CodeBlockView {
       clearTimeout(this.previewTimer)
       this.previewTimer = null
     }
-    const keepDiagram = isMermaidLanguage(language) && !!this.preview.querySelector('svg')
+    const keepDiagram = isMermaidLanguage(language) && !!content.trim() && !!this.preview.querySelector('svg')
     this.themeObserver.disconnect()
     this.preview.hidden = true
     this.preview.className = 'diagram-preview'
@@ -308,7 +349,7 @@ class CodeBlockView {
       return
     }
 
-    if (!isMermaidLanguage(language) || !content.trim()) {
+    if (!isMermaidLanguage(language)) {
       this.setPreviewKind(null)
       return
     }
@@ -316,6 +357,10 @@ class CodeBlockView {
     this.setPreviewKind('mermaid')
     this.preview.classList.add('mermaid-preview')
     this.preview.hidden = false
+    if (!content.trim()) {
+      this.preview.textContent = tStatic('code.emptyDiagram')
+      return
+    }
     this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-mermaid-style'] })
     if (!keepDiagram) this.preview.textContent = tStatic('code.renderingDiagram')
     this.previewTimer = setTimeout(() => {
@@ -364,7 +409,8 @@ class CodeBlockView {
   }
 
   stopEvent(event: Event): boolean {
-    return this.button.contains(event.target as Node) || this.savePngButton.contains(event.target as Node)
+    const target = event.target as Node
+    return this.button.contains(target) || this.savePngButton.contains(target) || this.editSourceButton.contains(target)
   }
 
   destroy(): void {
@@ -375,6 +421,7 @@ class CodeBlockView {
     this.preview.removeEventListener('click', this.selectMermaid)
     this.dom.removeEventListener(TOGGLE_PREVIEW_SOURCE_EVENT, this.togglePreviewSource)
     this.dom.removeEventListener(DELETE_MERMAID_EVENT, this.deleteMermaid)
+    this.dom.removeEventListener(FINISH_MERMAID_EDIT_EVENT, this.finishMermaidSourceFromKeyboard)
   }
 }
 
@@ -384,6 +431,13 @@ export const codeBlockCopyPlugin = $prose(
     new Plugin({
       key: new PluginKey('CODE_BLOCK_COPY'),
       props: {
+        handleKeyDown(view, event) {
+          if (event.key !== 'Escape' || view.composing || event.isComposing) return false
+          const { selection } = view.state
+          if (!(selection instanceof TextSelection) || selection.$from.parent.type.name !== 'code_block') return false
+          const dom = view.nodeDOM(selection.$from.before())
+          return dom?.dispatchEvent(new Event(FINISH_MERMAID_EDIT_EVENT, { cancelable: true })) === false
+        },
         nodeViews: {
           code_block: (node, view, getPos) => new CodeBlockView(node, view, getPos)
         }

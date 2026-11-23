@@ -52,6 +52,7 @@ import {
 } from '../shared/ipc'
 import { getLocale, setLocale, t } from './i18n'
 import { activateAppMenu, getAppMenu, rebuildMenu, setDefaultReadOnly, setMermaidStyle, setReadOnlyMode } from './menu'
+import { openUpdateDownload } from './update'
 
 const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown', '.mdown', '.mkd', '.mdwn', '.txt'])
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.avif'])
@@ -1436,6 +1437,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       return listener(event, ...(args as Args))
     })
   }
+
+  handle(IPC.openUpdateDownload, (_event, version: string, packageName: string) => {
+    const win = getWindow()
+    if (!win || typeof version !== 'string' || typeof packageName !== 'string') {
+      throw new Error('Invalid update download request')
+    }
+    return openUpdateDownload(win, version, packageName)
+  })
 
   handle(IPC.openFileDialog, async (): Promise<FileResult> => {
     const win = getWindow()
