@@ -157,6 +157,79 @@ button {
   background: var(--selection);
 }
 
+.update-dialog {
+  width: min(540px, calc(100% - 32px));
+  max-height: calc(100% - 32px);
+  margin: auto;
+  padding: 24px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  color: var(--text);
+  box-shadow: var(--glass-shadow-pop);
+  font-size: 14px;
+}
+
+.update-dialog::backdrop { background: rgb(0 0 0 / 34%); }
+.update-dialog h2 { margin-bottom: 8px; font-size: 20px; }
+.update-dialog header p { color: var(--text-secondary); line-height: 1.5; }
+.update-dialog h3 { font-size: 14px; }
+.update-notes, .update-packages { margin-top: 16px; }
+
+.update-notes-content, .update-packages select {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: inherit;
+  font: inherit;
+}
+
+.update-notes-content {
+  max-height: min(33vh, 280px);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.update-notes-content::-webkit-scrollbar { width: 10px; }
+.update-notes-content::-webkit-scrollbar-track {
+  border-radius: var(--radius-pill);
+  background: var(--bg-tertiary);
+}
+
+.update-notes-content > * + * { margin-top: 0.65em; }
+.update-notes-content :is(h1, h2) { margin-bottom: 0; font-size: 1.17em; }
+.update-notes-content :is(h3, h4, h5, h6) { font-size: 1em; }
+.update-notes-content :is(ul, ol) { padding-inline-start: 1.5em; }
+.update-notes-content li + li { margin-top: 0.2em; }
+.update-notes-content a[href] { color: var(--accent); text-decoration: underline; }
+
+.update-notes-content blockquote {
+  padding-inline-start: 0.75em;
+  border-inline-start: 3px solid var(--blockquote-border);
+  color: var(--blockquote-text);
+}
+
+.update-notes-content code { font-family: var(--font-mono); }
+.update-notes-content :not(pre) > code { padding: 0.1em 0.25em; background: var(--code-bg); }
+.update-notes-content pre { overflow: auto; padding: 8px; background: var(--code-bg); }
+.update-notes-content table { border-collapse: collapse; }
+.update-notes-content :is(th, td) { padding: 3px 8px; border: 1px solid var(--border); }
+.update-notes-content hr { border: 0; border-top: 1px solid var(--border); }
+
+.update-error { margin-top: 12px; color: var(--text-secondary); }
+.update-dialog footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.update-dialog button { padding: 8px 14px; border-radius: var(--radius-sm); background: var(--bg-tertiary); }
+.update-dialog button:hover:not(:disabled) { background: var(--bg-hover); }
+.update-dialog .update-primary { background: var(--accent); color: #fff; }
+.update-dialog .update-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.update-dialog button:disabled { opacity: 0.5; cursor: default; }
+
 /* Storage manager */
 .storage-backdrop {
   position: fixed;

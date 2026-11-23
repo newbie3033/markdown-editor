@@ -41,6 +41,7 @@ let mainWindow: BrowserWindow | null = null
 const pendingOpenPaths: string[] = []
 let rendererReady = false
 let rendererGone = false
+let pendingUpdateCheck = false
 // Set right before a close that the renderer already approved; the window's
 // 'close' handler must not intercept it again.
 let forceClose = false
@@ -105,7 +106,6 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
-    if (app.isPackaged) void checkForUpdates(mainWindow, true)
   })
 
   // Closing the window is routed through the renderer: it asks about
@@ -159,6 +159,15 @@ function createWindow(): void {
   }
 }
 
+function requestUpdateCheck(): void {
+  if (mainWindow && rendererReady && !rendererGone) {
+    void checkForUpdates(mainWindow, false)
+    return
+  }
+  pendingUpdateCheck = true
+  if (!mainWindow) createWindow()
+}
+
 function sendOpenPath(path: string): void {
   if (!isMarkdownPath(path) || !existsSync(path)) return
   grantDocumentAccess(path)
@@ -206,7 +215,7 @@ if (!gotSingleInstanceLock) {
     initLocale(rebuildMenu)
     registerLocalProtocols()
     registerIpc(() => mainWindow)
-    buildMenu(() => mainWindow)
+    buildMenu(() => mainWindow, requestUpdateCheck)
 
     // The renderer reports when its IPC listeners are registered; flush any
     // "open with" paths that were queued while the window was starting.
@@ -217,11 +226,17 @@ if (!gotSingleInstanceLock) {
         event.sender !== current.webContents ||
         event.senderFrame !== current.webContents.mainFrame
       ) return
+      const wasReady = rendererReady
       rendererReady = true
-      const win = current
-      if (!win) return
+      rendererGone = false
       for (const path of pendingOpenPaths.splice(0)) {
-        win.webContents.send(IPC.openPath, path)
+        current.webContents.send(IPC.openPath, path)
+      }
+      if (pendingUpdateCheck) {
+        pendingUpdateCheck = false
+        void checkForUpdates(current, false)
+      } else if (!wasReady && app.isPackaged) {
+        void checkForUpdates(current, true)
       }
     })
 

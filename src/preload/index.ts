@@ -172,6 +172,14 @@ const api: InkMarkApi = {
   cleanStorage: (categories: StorageCategoryId[]): Promise<StorageCleanupResult> =>
     ipcRenderer.invoke(IPC.cleanStorage, categories),
 
+  onUpdateAvailable: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, update: Parameters<typeof callback>[0]) => callback(update)
+    ipcRenderer.on(IPC.updateAvailable, listener)
+    return () => ipcRenderer.removeListener(IPC.updateAvailable, listener)
+  },
+
+  openUpdateDownload: (version, packageName) => ipcRenderer.invoke(IPC.openUpdateDownload, version, packageName),
+
   onMenuAction: (callback: (action: MenuAction) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, action: MenuAction): void =>
       callback(action)

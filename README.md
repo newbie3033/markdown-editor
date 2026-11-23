@@ -200,9 +200,13 @@ git push origin v1.0.2
 ```
 
 On packaged builds, InkMark checks GitHub Releases at startup. When a newer
-semantic version is available, it offers to open the latest Release page in the
-system browser so the user can choose and download the appropriate package.
-*Help → Check for Updates…* runs the same check manually. The Help menu also
+version is available, InkMark shows its version number, release notes, and a
+dropdown with all published installation packages. The package for the current
+system and architecture is selected when available. **Download** opens the
+chosen package's direct download link in the system browser, which handles
+where the file is saved. If the release has no packages,
+the dialog offers to open the release page. *Help → Check for Updates…* runs
+the same check manually. The Help menu also
 links to the open-source repository, and *Help → About* shows the current
 version with a one-click button to open the repository.
 

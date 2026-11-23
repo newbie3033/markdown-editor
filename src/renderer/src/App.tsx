@@ -4,7 +4,7 @@ import { DOMSerializer, type Node as ProseMirrorNode } from '@milkdown/prose/mod
 import { AllSelection } from '@milkdown/prose/state'
 import type { RemarkParser } from '@milkdown/kit/transformer'
 import { getMarkdown, getHTML, replaceAll as replaceAllRaw } from '@milkdown/kit/utils'
-import { DEFAULT_MERMAID_STYLE, isMermaidStyle, type FileVersion, type MenuAction, type SearchFlags, type ThemePreference } from '../../shared/ipc'
+import { DEFAULT_MERMAID_STYLE, isMermaidStyle, type FileVersion, type MenuAction, type SearchFlags, type ThemePreference, type UpdateInfo } from '../../shared/ipc'
 const MarkdownEditor = lazy(() =>
   import('./components/MarkdownEditor').then((module) => ({ default: module.MarkdownEditor }))
 )
@@ -16,6 +16,7 @@ import { StatusBar } from './components/StatusBar'
 import { EditorContextMenu } from './components/EditorContextMenu'
 import { FindBar } from './components/FindBar'
 import { StorageManager } from './components/StorageManager'
+import { UpdateDialog } from './components/UpdateDialog'
 import { buildHtmlDocument } from './lib/export'
 import { appendImage } from './lib/commands'
 import { findTextMatchesAsync, selectMatch } from './lib/search'
@@ -88,6 +89,7 @@ export default function App(): React.JSX.Element {
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null)
   useEffect(() => setPreviewImage(null), [filePath, sourceMode])
   const [storageOpen, setStorageOpen] = useState(false)
+  const [update, setUpdate] = useState<UpdateInfo | null>(null)
   const zoomRef = useRef(0)
   const leftSidebar = useResizableWidth('inkmark.sidebarWidth')
   const outlineSidebar = useResizableWidth('inkmark.outlineWidth')
@@ -1103,12 +1105,14 @@ export default function App(): React.JSX.Element {
     const offClose = window.api.onCloseRequest(() => {
       void handleCloseRequest()
     })
+    const offUpdate = window.api.onUpdateAvailable(setUpdate)
     window.api.rendererReady()
     return () => {
       offMenu()
       offOpen()
       offFileChanged()
       offClose()
+      offUpdate()
     }
   }, [recoveryReady, handleMenuAction, openPath, handleCloseRequest, handleExternalFileChange])
 
@@ -1439,6 +1443,9 @@ export default function App(): React.JSX.Element {
         protectRecovery={dirty}
         onClose={() => setStorageOpen(false)}
       />
+      {update && (
+        <UpdateDialog key={update.version} update={update} onClose={() => setUpdate(null)} />
+      )}
     </div>
   )
 }

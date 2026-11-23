@@ -1,10 +1,11 @@
 import { app, BrowserWindow, dialog, net, shell } from 'electron'
-import { RELEASES_URL } from '../shared/ipc'
+import { IPC, RELEASES_URL, REPOSITORY_URL, type UpdateInfo } from '../shared/ipc'
 import { t } from './i18n'
 
 const LATEST_RELEASE_API_URL =
   'https://api.github.com/repos/newbie3033/markdown-editor/releases/latest'
 const UPDATE_TIMEOUT_MS = 10_000
+const PACKAGE_NAME = /^InkMark-[\w.+-]+\.(?:appimage|deb|dmg|exe|msi|pkg|rpm|zip|7z|tar\.gz|tar\.xz)$/i
 
 interface Version {
   core: [number, number, number]
@@ -13,9 +14,30 @@ interface Version {
 
 interface LatestReleaseResponse {
   tag_name?: unknown
+  body?: unknown
+  assets?: unknown
 }
 
-let activeCheck: Promise<void> | null = null
+interface ReleaseAsset {
+  name: string
+  url: string
+}
+
+interface LatestRelease {
+  version: string
+  notes: string
+  assets: ReleaseAsset[]
+}
+
+const linuxArtifactArchitectures: Record<string, [appImage: string, deb: string]> = {
+  x64: ['x86_64', 'amd64'],
+  arm64: ['aarch64', 'arm64'],
+  arm: ['armv7l', 'armhf'],
+  ia32: ['i686', 'i386']
+}
+
+const activeChecks = new WeakMap<BrowserWindow, Promise<void>>()
+const availableReleases = new WeakMap<BrowserWindow, LatestRelease>()
 let automaticCheckStarted = false
 
 function parseVersion(value: string): Version | null {
@@ -63,7 +85,53 @@ export function compareVersions(leftValue: string, rightValue: string): number |
   return comparePrerelease(left.prerelease, right.prerelease)
 }
 
-async function latestReleaseVersion(): Promise<string> {
+function releaseAssets(value: unknown, tag: string): ReleaseAsset[] {
+  if (!Array.isArray(value)) return []
+  const prefix = `${REPOSITORY_URL}/releases/download/`
+  const assets = new Map<string, ReleaseAsset>()
+  for (const asset of value) {
+    const name = asset?.name
+    if (typeof name !== 'string' || !PACKAGE_NAME.test(name)) continue
+    const url = asset.browser_download_url
+    if (url === `${prefix}${tag}/${name}` || url === `${prefix}${encodeURIComponent(tag)}/${encodeURIComponent(name)}`) {
+      assets.set(name, { name, url })
+    }
+  }
+  return [...assets.values()]
+}
+
+function recommendedPackage({ assets, version }: LatestRelease): string | null {
+  const arch = process.arch
+  let names: string[]
+  switch (process.platform) {
+    case 'win32': {
+      const installer = `InkMark-Setup-${version}-${arch}.exe`
+      const portable = `InkMark-${version}-portable-${arch}.exe`
+      names = process.env['PORTABLE_EXECUTABLE_DIR']
+        ? [portable, installer]
+        : [installer, portable]
+      break
+    }
+    case 'darwin':
+      names = [`InkMark-${version}-${arch}.dmg`]
+      break
+    case 'linux': {
+      const architectures = linuxArtifactArchitectures[arch]
+      if (!architectures) return null
+      const [appImageArch, debArch] = architectures
+      const appImage = `InkMark-${version}-${appImageArch}.AppImage`
+      const deb = `InkMark-${version}-${debArch}.deb`
+      names = process.env['APPIMAGE'] ? [appImage, deb] : [deb, appImage]
+      break
+    }
+    default:
+      return null
+  }
+
+  return names.find(name => assets.some(asset => asset.name === name)) ?? null
+}
+
+async function latestRelease(): Promise<LatestRelease> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), UPDATE_TIMEOUT_MS)
   try {
@@ -88,10 +156,23 @@ async function latestReleaseVersion(): Promise<string> {
     if (typeof release.tag_name !== 'string' || !parseVersion(release.tag_name)) {
       throw new Error('The latest release has an invalid version tag')
     }
-    return release.tag_name.replace(/^v/, '')
+    const tag = release.tag_name.trim()
+    const version = tag.replace(/^v/, '')
+    return {
+      version,
+      notes: typeof release.body === 'string' ? release.body : '',
+      assets: releaseAssets(release.assets, tag)
+    }
   } finally {
     clearTimeout(timeout)
   }
+}
+
+export async function openUpdateDownload(win: BrowserWindow, version: string, packageName: string): Promise<void> {
+  const release = availableReleases.get(win)
+  const asset = release?.version === version && release.assets.find(item => item.name === packageName)
+  if (!asset) throw new Error('Update package is unavailable')
+  await shell.openExternal(asset.url)
 }
 
 async function showMessage(
@@ -103,29 +184,28 @@ async function showMessage(
     : dialog.showMessageBox(options)
 }
 
-async function runUpdateCheck(win: BrowserWindow | null, automatic: boolean): Promise<void> {
+async function runUpdateCheck(win: BrowserWindow, automatic: boolean): Promise<void> {
   try {
     const currentVersion = app.getVersion()
-    const latestVersion = await latestReleaseVersion()
-    const comparison = compareVersions(latestVersion, currentVersion)
+    const release = await latestRelease()
+    if (win.isDestroyed()) return
+    const comparison = compareVersions(release.version, currentVersion)
     if (comparison === null) throw new Error('The application version is invalid')
 
     if (comparison > 0) {
-      if (automatic && (!win || win.isDestroyed())) return
-      const result = await showMessage(win, {
-        type: 'info',
-        buttons: [t('dialog.downloadUpdate'), t('dialog.later')],
-        defaultId: 0,
-        cancelId: 1,
-        message: t('dialog.updateAvailableTitle'),
-        detail: t('dialog.updateAvailableDetail')
-          .replace('{current}', currentVersion)
-          .replace('{latest}', latestVersion)
-      })
-      if (result.response === 0) await shell.openExternal(RELEASES_URL)
+      availableReleases.set(win, release)
+      const update: UpdateInfo = {
+        currentVersion,
+        version: release.version,
+        notes: release.notes,
+        packages: release.assets.map(asset => asset.name),
+        recommendedPackage: recommendedPackage(release)
+      }
+      win.webContents.send(IPC.updateAvailable, update)
       return
     }
 
+    availableReleases.delete(win)
     if (!automatic) {
       await showMessage(win, {
         type: 'info',
@@ -135,6 +215,7 @@ async function runUpdateCheck(win: BrowserWindow | null, automatic: boolean): Pr
       })
     }
   } catch (error) {
+    if (win.isDestroyed()) return
     if (automatic) {
       console.warn('Automatic update check failed', error)
       return
@@ -156,13 +237,14 @@ async function runUpdateCheck(win: BrowserWindow | null, automatic: boolean): Pr
  * Check GitHub Releases, coalescing automatic/manual requests that overlap.
  * Automatic checks stay silent unless a newer version is available.
  */
-export function checkForUpdates(win: BrowserWindow | null, automatic: boolean): Promise<void> {
+export function checkForUpdates(win: BrowserWindow, automatic: boolean): Promise<void> {
   if (automatic && automaticCheckStarted) return Promise.resolve()
+  const activeCheck = activeChecks.get(win)
   if (activeCheck) return activeCheck
   if (automatic) automaticCheckStarted = true
   const check = runUpdateCheck(win, automatic).finally(() => {
-    if (activeCheck === check) activeCheck = null
+    activeChecks.delete(win)
   })
-  activeCheck = check
+  activeChecks.set(win, check)
   return check
 }

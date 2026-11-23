@@ -302,6 +302,8 @@ export const IPC = {
   setLocale: 'app:set-locale',
   getStorageStats: 'storage:stats',
   cleanStorage: 'storage:clean',
+  updateAvailable: 'update:available',
+  openUpdateDownload: 'update:open-download',
   menuAction: 'menu:action',
   openPath: 'file:open-path',
   // Renderer announces that its IPC listeners are registered; the main
@@ -322,6 +324,14 @@ export const REPOSITORY_URL = 'https://github.com/newbie3033/markdown-editor'
 
 /** Download page for the newest published GitHub Release. */
 export const RELEASES_URL = `${REPOSITORY_URL}/releases/latest`
+
+export interface UpdateInfo {
+  currentVersion: string
+  version: string
+  notes: string
+  packages: string[]
+  recommendedPackage: string | null
+}
 
 export interface InkMarkApi {
   readonly platform: string
@@ -378,6 +388,8 @@ export interface InkMarkApi {
   setLocale(lang: Lang): Promise<void>
   getStorageStats(): Promise<StorageStats>
   cleanStorage(categories: StorageCategoryId[]): Promise<StorageCleanupResult>
+  onUpdateAvailable(callback: (update: UpdateInfo) => void): () => void
+  openUpdateDownload(version: string, packageName: string): Promise<void>
   onMenuAction(callback: (action: MenuAction) => void): () => void
   onOpenPath(callback: (path: string) => void): () => void
   onFileChanged(callback: (path: string) => void): () => void

@@ -1,9 +1,9 @@
 import { BaseWindow, BrowserWindow, Menu, MenuItemConstructorOptions, nativeTheme, shell } from 'electron'
 import { DEFAULT_MERMAID_STYLE, IPC, MERMAID_STYLES, REPOSITORY_URL, type AppMenuItem, type Lang, type MenuAction, type MermaidStyle } from '../shared/ipc'
 import { getLocale, t } from './i18n'
-import { checkForUpdates } from './update'
 
 let getWindowRef: () => BrowserWindow | null = () => null
+let requestUpdateCheck: () => void
 let readOnlyMode = false
 let defaultReadOnly = false
 let mermaidStyle = DEFAULT_MERMAID_STYLE
@@ -237,7 +237,7 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
       submenu: [
         {
           label: t('menu.checkForUpdates'),
-          click: () => void checkForUpdates(getWindowRef(), false)
+          click: () => requestUpdateCheck()
         },
         { type: 'separator' },
         {
@@ -258,8 +258,9 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
   ]
 }
 
-export function buildMenu(getWindow: () => BrowserWindow | null): void {
+export function buildMenu(getWindow: () => BrowserWindow | null, checkForUpdates: () => void): void {
   getWindowRef = getWindow
+  requestUpdateCheck = checkForUpdates
   rebuildMenu()
 }
 
