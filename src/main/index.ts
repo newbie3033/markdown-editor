@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, protocol, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, protocol, screen, shell } from 'electron'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { IPC } from '../shared/ipc'
@@ -78,11 +78,22 @@ function trustedDevelopmentRendererUrl(value: string | undefined): string | null
 function createWindow(): void {
   rendererReady = false
   rendererGone = false
+  const defaultWidth = 1120
+  const defaultHeight = 760
+  const { workArea } = screen.getPrimaryDisplay()
+  const width = Math.min(defaultWidth, workArea.width)
+  const height = Math.min(defaultHeight, workArea.height)
+  const needsFit = width < defaultWidth || height < defaultHeight
+
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 760,
-    minHeight: 520,
+    width,
+    height,
+    minWidth: Math.min(840, width),
+    minHeight: Math.min(480, height),
+    ...(needsFit && {
+      x: workArea.x + Math.floor((workArea.width - width) / 2),
+      y: workArea.y + Math.floor((workArea.height - height) / 2)
+    }),
     show: false,
     title: 'InkMark',
     backgroundColor: '#ffffff',

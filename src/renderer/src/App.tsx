@@ -262,7 +262,7 @@ export default function App(): React.JSX.Element {
   }, [readOnly])
 
   useEffect(() => {
-    document.title = `${dirty ? '● ' : ''}${title}${readOnly ? t('status.readOnlySuffix') : ''} — InkMark`
+    document.title = `${dirty ? '● ' : ''}${title}${readOnly ? t('status.readOnlySuffix') : ''}`
     document.documentElement.style.setProperty('--editor-placeholder', `"${t('editor.placeholder')}"`)
   }, [dirty, title, readOnly, t])
 
