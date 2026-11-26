@@ -2443,7 +2443,7 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     const closeOneFolder = (await js(`(async () => {
       const roots = document.querySelectorAll('.folder-root')
       if (roots.length < 2) return { ok: false, n: roots.length }
-      roots[1].querySelector('.icon-btn').click()
+      roots[1].querySelector('.close-folder').click()
       await new Promise(r => setTimeout(r, 500))
       return { ok: true, n: document.querySelectorAll('.folder-root').length }
     })()`)) as { ok?: boolean; n?: number }
@@ -2476,7 +2476,7 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     // Close the dropped folder again to keep later assertions clean.
     await js(`(async () => {
       const roots = document.querySelectorAll('.folder-root')
-      if (roots.length >= 2) roots[1].querySelector('.icon-btn').click()
+      if (roots.length >= 2) roots[1].querySelector('.close-folder').click()
       return true
     })()`)
     await sleep(300)
@@ -2703,6 +2703,69 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     )) as boolean
     check('external file watcher can reload changed document', reloadedExternal === true)
     dialog.showMessageBox = originalExternalDialog
+
+    const originalNote = join(TEST_DIR, 'docs', 'saved-in-folder.md')
+    const renamedNote = join(TEST_DIR, 'docs', 'renamed-note.md')
+    const draftText = '# In-progress edits\n'
+    await js(`(() => {
+      const field = document.querySelector('.source-editor')
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(field, ${JSON.stringify(draftText)})
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+      field.setSelectionRange(2, 7)
+    })()`)
+    await fs.rename(originalNote, renamedNote)
+    await js("document.querySelector('.folder-header .refresh-folder').click()")
+    await sleep(450)
+    check('manual folder refresh shows renamed file and preserves the active edit and selection', await js(`(() => {
+      const names = Array.from(document.querySelectorAll('.tree-file')).map(row => row.title)
+      const field = document.querySelector('.source-editor')
+      return names.includes(${JSON.stringify(renamedNote)}) && !names.includes(${JSON.stringify(originalNote)}) &&
+        !!document.querySelector('.missing-document') && field.value === ${JSON.stringify(draftText)} &&
+        field.selectionStart === 2 && field.selectionEnd === 7
+    })()`) === true)
+
+    const locateDialog = dialog.showOpenDialog
+    let selectedFile = formattedPath
+    dialog.showOpenDialog = (async () => ({
+      canceled: false, filePaths: [selectedFile]
+    })) as typeof dialog.showOpenDialog
+    try {
+      await js("document.querySelector('.missing-document button')?.click()")
+      await sleep(350)
+      check('locating different content keeps the unsaved buffer', await js(`
+        !!document.querySelector('.missing-document') && document.querySelector('.source-editor').value === ${JSON.stringify(draftText)}
+      `) === true)
+      selectedFile = renamedNote
+      await js("document.querySelector('.missing-document button')?.click()")
+      await sleep(350)
+      check('locating renamed document updates its path and preserves selection', await js(`
+        !document.querySelector('.missing-document') && document.querySelector('.tree-file.active')?.title === ${JSON.stringify(renamedNote)} &&
+        document.querySelector('.source-editor').selectionEnd === 7
+      `) === true)
+      win.webContents.send(IPC.menuAction, 'save')
+      await sleep(450)
+      check('saving after locating writes edits to the renamed file',
+        !existsSync(originalNote) && await fs.readFile(renamedNote, 'utf8') === draftText)
+    } finally {
+      dialog.showOpenDialog = locateDialog
+    }
+
+    await fs.unlink(renamedNote)
+    await js("document.querySelector('.refresh-folder').click()")
+    await sleep(350)
+    const missingSaveDialog = dialog.showSaveDialog
+    dialog.showSaveDialog = (async () => ({
+      canceled: false, filePath: renamedNote
+    })) as typeof dialog.showSaveDialog
+    try {
+      await js("document.querySelector('.missing-document button:last-child')?.click()")
+      await sleep(450)
+      check('Save As can explicitly recreate a missing file and update its tree entry',
+        await fs.readFile(renamedNote, 'utf8').catch(() => '') === draftText &&
+        await js("!document.querySelector('.missing-document') && !!document.querySelector('.tree-file.active')") === true)
+    } finally {
+      dialog.showSaveDialog = missingSaveDialog
+    }
 
     await js(`(() => {
       const textarea = document.querySelector('.source-editor')

@@ -22,6 +22,7 @@ interface SidebarProps {
   activePath: string | null
   onOpenFile: (path: string) => void
   onOpenFolder: () => void
+  onRefreshFolder: (path: string) => void
   onCloseFolder: (path: string) => void
   onCloseFile: (path: string) => void
   onOpenSearchResult: (path: string, matchIndex: number, query: string, flags: SearchFlags) => void
@@ -88,7 +89,16 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                   <span className="folder-icon">📂</span>
                   <span className="folder-name">{folderName(folder.path)}</span>
                   <button
-                    className="icon-btn"
+                    className="icon-btn refresh-folder"
+                    title={t('files.refreshFolder')}
+                    aria-label={t('files.refreshFolder')}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => props.onRefreshFolder(folder.path)}
+                  >
+                    ↻
+                  </button>
+                  <button
+                    className="icon-btn close-folder"
                     onClick={() => props.onCloseFolder(folder.path)}
                     title={t('files.closeFolder')}
                   >

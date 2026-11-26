@@ -42,6 +42,11 @@ type SaveOutcome = 'saved' | 'canceled' | 'failed' | 'stale'
 
 const replaceAll = (markdown: string) => replaceAllRaw(normalizeDisplayMath(markdown))
 
+const isInFolder = (path: string, folder: string): boolean => {
+  const separator = window.api.platform === 'win32' ? '\\' : '/'
+  return path.startsWith(folder.endsWith(separator) ? folder : folder + separator)
+}
+
 const sameFileVersion = (left: FileVersion | null, right: FileVersion | null): boolean =>
   left?.mtimeMs === right?.mtimeMs &&
   left?.size === right?.size &&
@@ -51,6 +56,7 @@ export default function App(): React.JSX.Element {
   const { t, lang, setLang, ready: localeReady } = useI18n()
 
   const [filePath, setFilePath] = useState<string | null>(null)
+  const [missingPath, setMissingPath] = useState<string | null>(null)
   const [folders, setFolders] = useState<FolderState[]>([])
   const [openFiles, setOpenFiles] = useState<string[]>([])
   const [markdown, setMarkdown] = useState<string>('')
@@ -101,6 +107,7 @@ export default function App(): React.JSX.Element {
   filePathRef.current = filePath
   const fileVersionRef = useRef<FileVersion | null>(null)
   const foldersRef = useRef(folders)
+  const folderScans = useRef(new Map<string, symbol>())
   foldersRef.current = folders
   const openFilesRef = useRef(openFiles)
   openFilesRef.current = openFiles
@@ -471,15 +478,49 @@ export default function App(): React.JSX.Element {
   }, [])
 
   const isInsideAnyFolder = useCallback((path: string): boolean => {
-    return foldersRef.current.some(
-      (folder) => path.startsWith(folder.path + '/') || path.startsWith(folder.path + '\\')
-    )
+    return foldersRef.current.some((folder) => isInFolder(path, folder.path))
   }, [])
 
   const addToOpenFiles = useCallback((path: string) => {
     if (isInsideAnyFolder(path)) return
     setOpenFiles((prev) => (prev.includes(path) ? prev : [...prev, path]))
   }, [isInsideAnyFolder])
+
+  const scanFolder = useCallback(async (path: string, open = false) => {
+    const request = Symbol()
+    folderScans.current.set(path, request)
+    try {
+      const tree = await window.api.listMarkdown(path)
+      if (folderScans.current.get(path) !== request) return
+      setFolders((prev) => {
+        if (open && !prev.some((folder) => folder.path === path)) return [...prev, { path, tree }]
+        return prev.map((folder) => folder.path === path ? { path, tree } : folder)
+      })
+      if (open) setOpenFiles((prev) => prev.filter((entry) => !isInFolder(entry, path)))
+    } catch (error) {
+      if (folderScans.current.get(path) === request) throw error
+    } finally {
+      if (folderScans.current.get(path) === request) folderScans.current.delete(path)
+    }
+  }, [])
+
+  const checkDocumentPath = useCallback(async (path: string) => {
+    const exists = await window.api.pathExists(path)
+    if (filePathRef.current === path) setMissingPath(exists ? null : path)
+    return exists
+  }, [])
+
+  const refreshFolder = useCallback(async (path: string) => {
+    const current = filePathRef.current
+    try {
+      await Promise.all([
+        scanFolder(path),
+        current && isInFolder(current, path) && checkDocumentPath(current)
+      ])
+    } catch (error) {
+      await reportSaveError(t('files.refreshFailed'), error)
+    }
+  }, [checkDocumentPath, reportSaveError, scanFolder, t])
 
   const performSave = useCallback(
     async (saveAs = false): Promise<SaveOutcome> => {
@@ -505,25 +546,20 @@ export default function App(): React.JSX.Element {
           filePathRef.current = savedPath
           fileVersionRef.current = result.version ?? null
           cleanContentRef.current = content
+          setMissingPath(null)
 
           if (isNewPath) {
+            if (missingPath && missingPath === currentPath) {
+              setOpenFiles((prev) => prev.filter((path) => path !== currentPath))
+              void window.api.releaseDocumentAccess(missingPath).catch(console.error)
+            }
             addToOpenFiles(savedPath)
-            const inside = foldersRef.current.find(
-              (folder) =>
-                savedPath.startsWith(folder.path + '/') ||
-                savedPath.startsWith(folder.path + '\\')
-            )
-            if (inside) {
-              void window.api
-                .listMarkdown(inside.path)
-                .then((tree) => {
-                  setFolders((prev) =>
-                    prev.map((folder) =>
-                      folder.path === inside.path ? { ...folder, tree } : folder
-                    )
-                  )
-                })
-                .catch((error) => console.error('Failed to refresh folder', error))
+          }
+          if (isNewPath || savedPath === missingPath) {
+            for (const folder of foldersRef.current) {
+              if (isInFolder(savedPath, folder.path)) {
+                void scanFolder(folder.path).catch((error) => console.error('Failed to refresh folder', error))
+              }
             }
           }
         } else {
@@ -550,7 +586,7 @@ export default function App(): React.JSX.Element {
         return 'failed'
       }
     },
-    [addToOpenFiles, clearRecoveryDraft, getActiveContent, reportSaveError, t]
+    [addToOpenFiles, clearRecoveryDraft, getActiveContent, missingPath, reportSaveError, scanFolder, t]
   )
 
   const save = useCallback(
@@ -600,6 +636,7 @@ export default function App(): React.JSX.Element {
 
   const loadDocument = useCallback(
     async (path: string, content: string, version: FileVersion) => {
+      setMissingPath(null)
       setFilePath(path)
       filePathRef.current = path
       fileVersionRef.current = version
@@ -613,6 +650,50 @@ export default function App(): React.JSX.Element {
     },
     [addToOpenFiles, focusEditor, setDocumentContent, updateDocumentBase]
   )
+
+  const locateDocument = useCallback(async () => {
+    const original = filePathRef.current
+    if (!original || original !== missingPath) return
+    try {
+      const result = await window.api.openFileDialog()
+      if (result.canceled || !result.path || !result.version || result.content == null) return
+      const { path, content, version } = result
+      await saveQueueRef.current
+      const releaseUnusedSelection = () => {
+        if (path !== filePathRef.current && !openFilesRef.current.includes(path)) {
+          void window.api.releaseDocumentAccess(path).catch(console.error)
+        }
+      }
+      if (original !== filePathRef.current) {
+        releaseUnusedSelection()
+        return
+      }
+      const buffer = getActiveContent()
+      const keepEdits = buffer !== cleanContentRef.current
+      if (keepEdits && content !== cleanContentRef.current && content !== buffer) {
+        releaseUnusedSelection()
+        await reportSaveError(t('files.locateConflict'))
+        return
+      }
+      // A rename keeps the editor instance, selection and undo history intact.
+      // A clean buffer can also adopt a newer revision of the located file.
+      if (!keepEdits && buffer !== content) setDocumentContent(content)
+      cleanContentRef.current = content
+      fileVersionRef.current = version
+      ignoredExternalVersionRef.current = null
+      filePathRef.current = path
+      setFilePath(path)
+      setDirty(keepEdits && buffer !== content)
+      setMissingPath(null)
+      if (path !== original) {
+        setOpenFiles((prev) => prev.filter((entry) => entry !== original))
+        addToOpenFiles(path)
+        await window.api.releaseDocumentAccess(original)
+      }
+    } catch (error) {
+      await reportSaveError(t('error.openFailed'), error)
+    }
+  }, [addToOpenFiles, getActiveContent, missingPath, reportSaveError, setDocumentContent, t])
 
   const openFile = useCallback(async () => {
     try {
@@ -662,35 +743,28 @@ export default function App(): React.JSX.Element {
         if (result.canceled || !result.path) return
         path = result.path
       }
-      const tree = await window.api.listMarkdown(path)
-      setFolders((prev) =>
-        prev.some((folder) => folder.path === path)
-          ? prev.map((folder) => (folder.path === path ? { path, tree } : folder))
-          : [...prev, { path, tree }]
-      )
-      // Files now covered by this folder no longer need to be listed as loose.
-      setOpenFiles((prev) =>
-        prev.filter((p) => !(p.startsWith(path + '/') || p.startsWith(path + '\\')))
-      )
+      await scanFolder(path, true)
     } catch (error) {
       console.error('Failed to open folder', error)
       await reportSaveError(t('error.openFailed'), error)
     }
-  }, [reportSaveError, t])
+  }, [reportSaveError, scanFolder, t])
 
   const closeFolder = useCallback((path: string) => {
+    folderScans.current.delete(path)
     setFolders((prev) => prev.filter((folder) => folder.path !== path))
     void window.api.releaseDirectoryAccess(path).catch((error) =>
       console.error('Failed to release folder access', error)
     )
     // Keep the current document reachable: it becomes a loose file.
     const current = filePathRef.current
-    if (current && (current.startsWith(path + '/') || current.startsWith(path + '\\'))) {
+    if (current && isInFolder(current, path)) {
       setOpenFiles((prev) => (prev.includes(current) ? prev : [...prev, current]))
     }
   }, [])
 
   const closeAllFolders = useCallback(() => {
+    folderScans.current.clear()
     const current = filePathRef.current
     if (current) setOpenFiles((prev) => (prev.includes(current) ? prev : [...prev, current]))
     for (const folder of foldersRef.current) {
@@ -729,6 +803,8 @@ export default function App(): React.JSX.Element {
     externalPromptRef.current = true
     try {
       const latest = await window.api.readFile(path)
+      if (filePathRef.current !== path) return
+      setMissingPath(null)
       if (sameFileVersion(latest.version, fileVersionRef.current)) return
       const signature = `${latest.version.mtimeMs}:${latest.version.size}:${latest.version.sha256}`
       if (ignoredExternalVersionRef.current === signature) return
@@ -737,6 +813,7 @@ export default function App(): React.JSX.Element {
         fileNameFromPath(path),
         hasUnsavedChanges()
       )
+      if (filePathRef.current !== path) return
       if (choice === 'reload') {
         ignoredExternalVersionRef.current = null
         await clearRecoveryDraft()
@@ -752,12 +829,13 @@ export default function App(): React.JSX.Element {
         ignoredExternalVersionRef.current = signature
       }
     } catch (error) {
+      if (filePathRef.current !== path || !(await checkDocumentPath(path))) return
       console.error('Failed to inspect externally changed file', error)
       await reportSaveError(t('error.openFailed'), error)
     } finally {
       externalPromptRef.current = false
     }
-  }, [clearRecoveryDraft, hasUnsavedChanges, loadDocument, reportSaveError, save, t])
+  }, [checkDocumentPath, clearRecoveryDraft, hasUnsavedChanges, loadDocument, reportSaveError, save, t])
 
   useEffect(() => {
     void window.api.watchFile(filePath).catch((error) =>
@@ -1324,6 +1402,7 @@ export default function App(): React.JSX.Element {
           onResetWidth={leftSidebar.resetWidth}
           onOpenFile={(path) => void openPath(path)}
           onOpenFolder={() => void openFolder()}
+          onRefreshFolder={(path) => void refreshFolder(path)}
           onCloseFolder={closeFolder}
           onCloseFile={(path) => void closeFile(path)}
           onOpenSearchResult={(path, index, query, flags) =>
@@ -1333,6 +1412,13 @@ export default function App(): React.JSX.Element {
       )}
 
       <main className="editor-area">
+        {filePath && missingPath === filePath && (
+          <div className="missing-document">
+            <span role="status">{t('files.missingDocument', { name: title })}</span>
+            <button onClick={() => void locateDocument()}>{t('files.locate')}</button>
+            <button onClick={() => void save(true)}>{t('files.saveAs')}</button>
+          </div>
+        )}
         {findOpen && (
           <FindBar
             getEditor={getEditor}
