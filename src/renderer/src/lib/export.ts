@@ -1,3 +1,4 @@
+import { renderDocumentHtml } from './documentHtml'
 import themeCss from '../styles/theme.css?raw'
 import { renderDiagram, isMathLanguage, isMermaidLanguage } from './codeBlockCopy'
 import { selfContainedKatexCss } from './katexExportCss'
@@ -11,7 +12,7 @@ function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;')
 }
 
-async function addRenderedPreviews(bodyHtml: string): Promise<string> {
+async function addRenderedPreviews(bodyHtml: string, renderHtml: boolean): Promise<string> {
   const style = getMermaidStyle()
   const template = document.createElement('template')
   template.innerHTML = bodyHtml
@@ -69,6 +70,8 @@ async function addRenderedPreviews(bodyHtml: string): Promise<string> {
     }
   }
 
+  if (renderHtml) renderDocumentHtml(template.content)
+
   for (const inlineMath of Array.from(
     template.content.querySelectorAll<HTMLElement>('span[data-type="math_inline"]')
   )) {
@@ -102,9 +105,9 @@ async function addRenderedPreviews(bodyHtml: string): Promise<string> {
   return template.innerHTML
 }
 
-export async function buildHtmlDocument(bodyHtml: string, title: string): Promise<string> {
+export async function buildHtmlDocument(bodyHtml: string, title: string, renderHtml: boolean): Promise<string> {
   const safeTitle = escapeHtml(title)
-  const renderedBody = await addRenderedPreviews(bodyHtml)
+  const renderedBody = await addRenderedPreviews(bodyHtml, renderHtml)
   return `<!doctype html>
 <html lang="en" data-theme="light">
 <head>

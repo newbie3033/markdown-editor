@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useLayoutEffect, useEffect, useRef } from 'react'
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from '@milkdown/react'
 import {
   Editor,
@@ -8,6 +8,8 @@ import {
   editorViewOptionsCtx,
   remarkStringifyOptionsCtx
 } from '@milkdown/kit/core'
+import { Plugin } from '@milkdown/prose/state'
+import { $prose } from '@milkdown/kit/utils'
 import { commonmark, headingIdGenerator } from '@milkdown/kit/preset/commonmark'
 import { gfm, remarkGFMPlugin } from '@milkdown/kit/preset/gfm'
 import { history } from '@milkdown/kit/plugin/history'
@@ -21,6 +23,7 @@ import { prism, prismConfig } from '@milkdown/plugin-prism'
 import mermaidGrammar from 'refractor/mermaid'
 import latexGrammar from 'refractor/latex'
 import { codeBlockCopyPlugin } from '../lib/codeBlockCopy'
+import { htmlPreviewPlugin, setHtmlPreview } from '../lib/htmlPreview'
 import { localImageViewPlugin } from '../lib/imageView'
 import { createTyporaKeymap } from '../lib/typoraKeymap'
 import {
@@ -51,6 +54,7 @@ import {
 
 interface EditorProps {
   initialMarkdown: string
+  renderHtml: boolean
   onReady: (editor: Editor) => void
   onChange: () => void
   onOutline: (items: OutlineItem[]) => void
@@ -67,6 +71,7 @@ interface EditorProps {
 
 function InnerEditor({
   initialMarkdown,
+  renderHtml,
   onReady,
   onChange,
   onOutline,
@@ -164,11 +169,11 @@ function InnerEditor({
             enableHtmlFileUploader: true
           }))
           ctx.get(listenerCtx).updated((_ctx, doc) => {
-            onChangeRef.current()
             onOutlineRef.current(outlineWithoutHtmlComments(doc))
           })
         })
         .use(commonmark)
+        .use(htmlPreviewPlugin)
         .use(htmlCommentSchema)
         .use(remarkHtmlCommentPlugin)
         .use(htmlCommentInputRule)
@@ -191,6 +196,27 @@ function InnerEditor({
         .use(trailing)
         .use(indent)
         .use(listener)
+        .use($prose(() => new Plugin({
+          view() {
+            let queued = false
+            let destroyed = false
+            return {
+              update(view, previous) {
+                if (queued || view.state.doc.eq(previous.doc)) return
+                queued = true
+                // Read the committed document after synchronous replacements
+                // have updated their source snapshot, without waiting on timers.
+                queueMicrotask(() => {
+                  queued = false
+                  if (!destroyed) onChangeRef.current()
+                })
+              },
+              destroy() {
+                destroyed = true
+              }
+            }
+          }
+        })))
         .use(codeBlockCopyPlugin)
         .use(localImageViewPlugin)
         .config((ctx) => {
@@ -251,6 +277,14 @@ function InnerEditor({
       if (editor) onReadyRef.current(editor)
     }
   }, [loading, getInstance])
+
+  useLayoutEffect(() => {
+    if (loading) return
+    getInstance()?.action(ctx => {
+      const view = ctx.get(editorViewCtx)
+      view.dispatch(setHtmlPreview(view.state.tr, renderHtml))
+    })
+  }, [loading, getInstance, renderHtml])
 
   return <Milkdown />
 }

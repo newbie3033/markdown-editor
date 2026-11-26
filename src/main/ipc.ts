@@ -51,6 +51,7 @@ import {
   type WriteFileResult
 } from '../shared/ipc'
 import { getLocale, setLocale, t } from './i18n'
+import { htmlRenderingEnabled } from './settings'
 import { activateAppMenu, getAppMenu, rebuildMenu, setDefaultReadOnly, setMermaidStyle, setReadOnlyMode } from './menu'
 import { openUpdateDownload } from './update'
 
@@ -1980,6 +1981,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   handle(IPC.getLocale, () => getLocale())
 
   handle(IPC.getAppMenu, () => getAppMenu())
+
+  handle(IPC.getRenderHtml, () => htmlRenderingEnabled())
 
   handle(IPC.activateAppMenu, (event, id: number) => {
     const win = BrowserWindow.fromWebContents(event.sender)

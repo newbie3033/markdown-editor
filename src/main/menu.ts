@@ -1,7 +1,7 @@
 import { BaseWindow, BrowserWindow, Menu, MenuItemConstructorOptions, nativeTheme, shell } from 'electron'
 import { DEFAULT_MERMAID_STYLE, IPC, MERMAID_STYLES, REPOSITORY_URL, type AppMenuItem, type Lang, type MenuAction, type MermaidStyle } from '../shared/ipc'
 import { getLocale, t } from './i18n'
-import { writeSettings } from './settings'
+import { htmlRenderingEnabled, writeSettings } from './settings'
 import { automaticUpdateChecksEnabled } from './update'
 
 let getWindowRef: () => BrowserWindow | null = () => null
@@ -134,6 +134,22 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
           label: t('menu.toggleSource'),
           accelerator: `${modifier}+/`,
           click: (_i, w) => send('toggle-source', w ?? getWindowRef())
+        },
+        {
+          id: 'render-html',
+          label: t('menu.renderHtml'),
+          type: 'checkbox',
+          checked: htmlRenderingEnabled(),
+          click: (_item, win) => {
+            const enabled = !htmlRenderingEnabled()
+            try {
+              writeSettings({ renderHtml: enabled })
+              send(enabled ? 'render-html-on' : 'render-html-off', win ?? getWindowRef())
+            } catch (error) {
+              console.warn('Could not save the HTML rendering setting', error)
+            }
+            rebuildMenu()
+          }
         },
         { type: 'separator' },
         {

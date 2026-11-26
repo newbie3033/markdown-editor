@@ -156,6 +156,7 @@ const api: InkMarkApi = {
 
   getLocale: (): Promise<Lang> => ipcRenderer.invoke(IPC.getLocale),
 
+  getRenderHtml: () => ipcRenderer.invoke(IPC.getRenderHtml),
   getAppMenu: () => ipcRenderer.invoke(IPC.getAppMenu),
   activateAppMenu: id => ipcRenderer.invoke(IPC.activateAppMenu, id),
   onAppMenuUpdated: callback => {

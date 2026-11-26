@@ -2347,6 +2347,78 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       await new Promise<void>((resolve) => remoteServer.close(() => resolve()))
     }
 
+    const rawHtmlPath = join(TEST_DIR, 'docs', 'raw-html.md')
+    const rawHtml = [
+      '# HTML rendering', '',
+      '[Jump](#groundsec01)', '',
+      '<a id="groundsec01"></a> <summary>总方案目录</summary>', '',
+      'Inline <kbd>Ctrl</kbd> and <sup>2</sup>, with <span style="color: red; position: fixed">**bold**</span>.', '',
+      '<details><summary>Fold</summary>', '',
+      '**Markdown inside**', '',
+      '</details>', '',
+      '<table><tr><td>Cell</td></tr></table>', '',
+      '<a href="javascript:void(0)" onclick="void(0)" class="html-preview">Unsafe link</a>', '',
+      'Literal `<kbd>unrendered</kbd>`.', ''
+    ].join('\n')
+    await fs.writeFile(rawHtmlPath, rawHtml)
+    win.webContents.send(IPC.openPath, rawHtmlPath)
+    await sleep(350)
+    const toggleHtml = () => {
+      Menu.getApplicationMenu()?.getMenuItemById('render-html')?.click(undefined, win, win.webContents)
+    }
+    const htmlSourceBeforeToggle = await js('window.__inkmarkGetMarkdown()')
+    check('HTML rendering defaults to on in menu and settings',
+      Menu.getApplicationMenu()?.getMenuItemById('render-html')?.checked === true &&
+      await js('window.api.getRenderHtml()') === true)
+    const preview = await js(`(async () => {
+      const editor = document.querySelector('.ProseMirror')
+      const details = editor?.querySelector('.html-preview details')
+      const anchor = editor?.querySelector('.html-preview #groundsec01')
+      let jumped = false
+      if (anchor) anchor.scrollIntoView = () => { jumped = true }
+      editor?.querySelector('a[href="#groundsec01"]')?.click()
+      details?.querySelector('summary')?.click()
+      const unsafe = Array.from(editor?.querySelectorAll('.html-preview a') ?? [])
+        .find(link => link.textContent === 'Unsafe link')
+      const inline = editor?.querySelector('.html-preview span[style]')
+      const exported = document.createElement('template')
+      exported.innerHTML = await window.__inkmarkBuildExportHtml()
+      return {
+        inline: editor?.querySelector('.html-preview kbd')?.textContent === 'Ctrl' &&
+          editor?.querySelector('.html-preview sup')?.textContent === '2' &&
+          inline?.style.color === 'red' && !inline?.style.position &&
+          inline?.querySelector('strong')?.textContent === 'bold',
+        table: editor?.querySelector('.html-preview td')?.textContent === 'Cell',
+        anchor: jumped && anchor?.closest('.html-preview')?.querySelector('summary')?.textContent === '总方案目录',
+        details: details?.open && details?.querySelector('p strong')?.textContent === 'Markdown inside',
+        sanitized: !!unsafe && !unsafe.hasAttribute('onclick') &&
+          !unsafe.hasAttribute('href') && !unsafe.hasAttribute('class'),
+        literal: editor?.querySelector('p code')?.textContent === '<kbd>unrendered</kbd>',
+        export: !!exported.content.querySelector('details > summary') &&
+          !!exported.content.querySelector('#groundsec01') &&
+          !exported.content.querySelector('a[onclick], [data-inkmark-generated]')
+      }
+    })()`) as Record<string, boolean>
+    check('HTML rendering supports inline tags, blocks, links and export', Object.values(preview).every(Boolean), JSON.stringify(preview))
+
+    toggleHtml()
+    try {
+      await sleep(150)
+      check('HTML rendering can be turned off', await js(
+        `Boolean(document.querySelector('.ProseMirror [data-type="html"]')) && !document.querySelector(".html-preview")`
+      ) === true && Menu.getApplicationMenu()?.getMenuItemById('render-html')?.checked === false &&
+        await js('window.api.getRenderHtml()') === false)
+      check('turning HTML rendering off preserves Markdown', await js('window.__inkmarkGetMarkdown()') === htmlSourceBeforeToggle)
+    } finally {
+      toggleHtml()
+    }
+    await sleep(150)
+    check('HTML rendering can be turned on again', await js(
+      `Boolean(document.querySelector('.ProseMirror .html-preview #groundsec01'))`
+    ) === true && Menu.getApplicationMenu()?.getMenuItemById('render-html')?.checked === true &&
+      await js('window.api.getRenderHtml()') === true)
+    check('turning HTML rendering on preserves Markdown', await js('window.__inkmarkGetMarkdown()') === htmlSourceBeforeToggle)
+
     // Restore the export document for the following status-bar assertions.
     win.webContents.send(IPC.openPath, join(TEST_DIR, 'docs', 'export-test.md'))
     await sleep(800)
@@ -2497,15 +2569,30 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
 
     const insertHr = `(async () => {
       const pm = document.querySelector('.ProseMirror')
+      const dirtyIndicator = () => document.querySelector('.statusbar-left .dirty-indicator')?.textContent?.trim()
+      const waitFor = async (condition) => {
+        const deadline = performance.now() + 3000
+        while (!condition() && performance.now() < deadline) {
+          await new Promise(r => setTimeout(r, 25))
+        }
+      }
+      const before = pm.querySelectorAll('hr').length
+      const initiallyClean = dirtyIndicator() === '○'
       pm.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 500, clientY: 300 }))
-      await new Promise(r => setTimeout(r, 300))
-      const hrBtn = Array.from(document.querySelectorAll('.ctx-item')).find(b => (b.textContent || '').includes('分割线'))
-      hrBtn?.click()
-      await new Promise(r => setTimeout(r, 400))
-      return document.querySelector('.statusbar-left .dirty-indicator')?.textContent?.trim()
+      const findHrButton = () => Array.from(document.querySelectorAll('.ctx-item'))
+        .find(button => button.textContent?.includes('分割线'))
+      await waitFor(findHrButton)
+      const button = findHrButton()
+      button?.click()
+      if (button) await waitFor(() => pm.querySelectorAll('hr').length > before && dirtyIndicator() === '●')
+      return { initiallyClean, commandFound: !!button, inserted: pm.querySelectorAll('hr').length > before,
+        dirty: dirtyIndicator() === '●' }
     })()`
-    const dirtyDot = (await js(insertHr)) as string | undefined
-    check('loose file made dirty (hr insert)', dirtyDot === '●', String(dirtyDot))
+    const checkHrEdit = async (name: string): Promise<void> => {
+      const result = (await js(insertHr)) as Record<string, boolean>
+      check(name, Object.values(result).every(Boolean), JSON.stringify(result))
+    }
+    await checkHrEdit('loose file made dirty (hr insert)')
 
     const originalShowMessageBox = dialog.showMessageBox.bind(dialog)
     // Cancel keeps the file open.
@@ -2962,8 +3049,7 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
 
     // 18. Closing the whole window with unsaved changes must prompt:
     // Cancel keeps the window open, Discard closes it.
-    const dirtyBeforeClose = (await js(insertHr)) as string | undefined
-    check('window close test: doc is dirty', dirtyBeforeClose === '●', String(dirtyBeforeClose))
+    await checkHrEdit('window close test: doc is dirty')
     const originalCloseMessageBox = dialog.showMessageBox.bind(dialog)
     dialog.showMessageBox = (async () => ({
       response: 2,
