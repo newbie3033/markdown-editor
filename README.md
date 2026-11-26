@@ -126,6 +126,31 @@ src/
         └── styles/       #   Typora-like light/dark theme
 ```
 
+## Open from the command line
+
+Pass a Markdown or text file to open it in the editor, or pass a directory to
+show it in the file sidebar. InkMark uses its existing window if it is already
+running. Relative paths start from your shell's working directory when you
+launch the installed app directly. Use absolute paths with the Windows portable
+launcher, which starts InkMark in its extraction directory.
+
+```bash
+# Linux, with inkmark on your PATH
+inkmark "./notes/Meeting notes.md"
+inkmark ./notes
+
+# macOS, with InkMark installed in Applications
+/Applications/InkMark.app/Contents/MacOS/InkMark ./notes
+```
+
+```powershell
+# Windows, from the directory containing the installed executable
+.\InkMark.exe ".\notes\Meeting notes.md"
+.\InkMark.exe ".\notes"
+```
+
+From a source checkout, use `npm run dev -- -- "./notes"`.
+
 ## Development
 
 Requirements: Node.js 20+ and npm.

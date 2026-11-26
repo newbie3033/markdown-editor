@@ -1,8 +1,8 @@
 import { app, BrowserWindow, ipcMain, protocol, screen, shell } from 'electron'
-import { join } from 'node:path'
-import { existsSync } from 'node:fs'
+import { isAbsolute, join, resolve } from 'node:path'
+import { statSync } from 'node:fs'
 import { IPC } from '../shared/ipc'
-import { grantDocumentAccess, registerLocalProtocols, registerIpc } from './ipc'
+import { grantDirectoryAccess, grantDocumentAccess, registerLocalProtocols, registerIpc } from './ipc'
 import { buildMenu, rebuildMenu } from './menu'
 import { initLocale } from './i18n'
 import { checkForUpdates } from './update'
@@ -35,10 +35,13 @@ protocol.registerSchemesAsPrivileged([
 
 let mainWindow: BrowserWindow | null = null
 
-// "Open with" paths that arrive before the renderer has registered its IPC
-// listeners. They are flushed when the renderer announces readiness, so
-// startup file arguments are never silently dropped.
-const pendingOpenPaths: string[] = []
+interface OpenTarget {
+  path: string
+  isDirectory: boolean
+}
+
+// Hold launch targets until the renderer has registered its IPC listeners.
+const pendingOpenPaths: OpenTarget[] = []
 let rendererReady = false
 let rendererGone = false
 let pendingUpdateCheck = false
@@ -52,6 +55,17 @@ function isMarkdownPath(path: string): boolean {
   const dot = path.lastIndexOf('.')
   if (dot === -1) return false
   return MARKDOWN_EXTENSIONS.has(path.slice(dot).toLowerCase())
+}
+
+function getOpenTarget(path: string): OpenTarget | undefined {
+  try {
+    const stat = statSync(path, { throwIfNoEntry: false })
+    if (stat?.isDirectory()) return { path, isDirectory: true }
+    if (stat?.isFile() && isMarkdownPath(path)) return { path, isDirectory: false }
+  } catch {
+    // An inaccessible path cannot be opened.
+  }
+  return undefined
 }
 
 function isAllowedExternalUrl(value: string): boolean {
@@ -179,43 +193,51 @@ function requestUpdateCheck(): void {
   if (!mainWindow) createWindow()
 }
 
-function sendOpenPath(path: string): void {
-  if (!isMarkdownPath(path) || !existsSync(path)) return
-  grantDocumentAccess(path)
+function sendOpenPath(target: OpenTarget): void {
+  const { path, isDirectory } = target
+  if (isDirectory) grantDirectoryAccess(path)
+  else grantDocumentAccess(path)
   const win = mainWindow
-  if (win && rendererReady) {
-    // Renderer listeners are up: deliver directly.
-    if (win.isMinimized()) win.restore()
-    win.focus()
-    win.webContents.send(IPC.openPath, path)
-    return
-  }
   if (win) {
     if (win.isMinimized()) win.restore()
     win.focus()
+    if (rendererReady) {
+      win.webContents.send(IPC.openPath, path, isDirectory)
+      return
+    }
   } else if (app.isReady()) {
     createWindow()
   }
   // Window not created or renderer still loading: queue for the ready signal.
-  if (!pendingOpenPaths.includes(path)) pendingOpenPaths.push(path)
+  if (!pendingOpenPaths.some((pending) => pending.path === path)) pendingOpenPaths.push(target)
 }
 
-function pathFromArgv(): string | null {
-  for (const arg of process.argv.slice(1)) {
-    if (arg.startsWith('-')) continue
-    if (existsSync(arg) && isMarkdownPath(arg)) return arg
+function targetFromArgv(): OpenTarget | undefined {
+  // The default Electron executable includes the app entry point in argv.
+  let parsingOptions = true
+  for (const arg of process.argv.slice(process.defaultApp ? 2 : 1)) {
+    if (parsingOptions && arg === '--') {
+      parsingOptions = false
+      continue
+    }
+    if (!arg || (parsingOptions && arg.startsWith('-'))) continue
+    const target = getOpenTarget(resolve(arg))
+    if (target) return target
   }
-  return null
+  return undefined
 }
 
-const gotSingleInstanceLock = app.requestSingleInstanceLock()
+const initialTarget = targetFromArgv()
+// Resolve relative arguments in the launching process, using its working directory.
+const gotSingleInstanceLock = app.requestSingleInstanceLock({ openPath: initialTarget?.path ?? null })
 
 if (!gotSingleInstanceLock) {
   app.quit()
 } else {
-  app.on('second-instance', (_event, argv) => {
-    const path = argv.find((arg) => isMarkdownPath(arg) && existsSync(arg))
-    if (path) sendOpenPath(path)
+  app.on('second-instance', (_event, _argv, _workingDirectory, data) => {
+    const path = data && typeof data === 'object' && 'openPath' in data ? data.openPath : undefined
+    const target = typeof path === 'string' && isAbsolute(path) ? getOpenTarget(path) : undefined
+    if (target) sendOpenPath(target)
     else if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
@@ -240,8 +262,8 @@ if (!gotSingleInstanceLock) {
       const wasReady = rendererReady
       rendererReady = true
       rendererGone = false
-      for (const path of pendingOpenPaths.splice(0)) {
-        current.webContents.send(IPC.openPath, path)
+      for (const { path, isDirectory } of pendingOpenPaths.splice(0)) {
+        current.webContents.send(IPC.openPath, path, isDirectory)
       }
       if (pendingUpdateCheck) {
         pendingUpdateCheck = false
@@ -266,8 +288,7 @@ if (!gotSingleInstanceLock) {
 
     createWindow()
 
-    const initialPath = pathFromArgv()
-    if (initialPath) sendOpenPath(initialPath)
+    if (initialTarget) sendOpenPath(initialTarget)
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -276,7 +297,8 @@ if (!gotSingleInstanceLock) {
 
   app.on('open-file', (event, path) => {
     event.preventDefault()
-    sendOpenPath(path)
+    const target = getOpenTarget(path)
+    if (target) sendOpenPath(target)
   })
 
   app.on('window-all-closed', () => {

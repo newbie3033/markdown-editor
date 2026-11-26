@@ -188,8 +188,9 @@ const api: InkMarkApi = {
     return () => ipcRenderer.removeListener(IPC.menuAction, listener)
   },
 
-  onOpenPath: (callback: (path: string) => void): (() => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, path: string): void => callback(path)
+  onOpenPath: (callback: (path: string, isDirectory: boolean) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, path: string, isDirectory = false): void =>
+      callback(path, isDirectory)
     ipcRenderer.on(IPC.openPath, listener)
     return () => ipcRenderer.removeListener(IPC.openPath, listener)
   },
