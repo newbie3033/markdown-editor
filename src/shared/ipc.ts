@@ -5,7 +5,7 @@
 export const MERMAID_STYLES = ['soft', 'classic-blue', 'github', 'default', 'base'] as const
 export type MermaidStyle = (typeof MERMAID_STYLES)[number]
 export const DEFAULT_RENDER_HTML = true
-export const DEFAULT_MERMAID_STYLE: MermaidStyle = 'soft'
+export const DEFAULT_MERMAID_STYLE: MermaidStyle = 'default'
 
 export function isMermaidStyle(value: unknown): value is MermaidStyle {
   return MERMAID_STYLES.some(style => style === value)
