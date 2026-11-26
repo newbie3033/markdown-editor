@@ -919,7 +919,13 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       `len=${diagramHtml.length}`
     )
 
-    for (const style of ['soft', 'github'] as const) {
+    check(
+      'Mermaid defaults to Default in the editor and menu',
+      await js('document.documentElement.dataset.mermaidStyle') === 'default' &&
+        Menu.getApplicationMenu()?.getMenuItemById('mermaid-style-settings')?.submenu?.items
+          .find(item => item.label === 'Default')?.checked === true
+    )
+    for (const style of ['default', 'soft', 'github'] as const) {
       const previous = await js(`({
         style: document.documentElement.dataset.mermaidStyle,
         ids: Array.from(document.querySelectorAll('.mermaid-preview svg'), svg => svg.id)
@@ -930,7 +936,7 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
         for (let i = 0; i < 40; i += 1) {
           const [flow, sequence] = document.querySelectorAll('.mermaid-preview svg')
           const actorCount = sequence?.querySelectorAll('rect.actor-bottom').length
-          const label = Array.from(flow?.querySelectorAll('.edgeLabel text') ?? [])
+          const label = Array.from(flow?.querySelectorAll('.edgeLabel text, .edgeLabel foreignObject') ?? [])
             .find(text => text.textContent.includes('Continue'))
           const requestedStyle = document.documentElement.dataset.mermaidStyle === '${style}'
           const updated = previous.style === '${style}' ||
@@ -942,7 +948,7 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       })()`)) === true
       check(`Mermaid ${style} renders flowchart edge labels and both rows of sequence actors`, complete)
     }
-    win.webContents.send(IPC.menuAction, 'mermaid-style-soft')
+    win.webContents.send(IPC.menuAction, 'mermaid-style-default')
 
     // Force Chromium's hover state without scrolling or relying on the OS pointer.
     const debuggerSession = win.webContents.debugger
