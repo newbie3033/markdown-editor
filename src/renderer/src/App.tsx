@@ -1207,11 +1207,19 @@ export default function App(): React.JSX.Element {
 
   // Subscribe to native menu events, OS "open with" events, and window-close
   // requests. Readiness is announced only after the listeners exist so the
-  // main process never drops a queued file path.
+  // main process never drops a queued path.
   useEffect(() => {
     if (!recoveryReady) return
     const offMenu = window.api.onMenuAction(handleMenuAction)
-    const offOpen = window.api.onOpenPath((path) => void openPath(path))
+    const offOpen = window.api.onOpenPath((path, isDirectory) => {
+      if (isDirectory) {
+        setShowSidebar(true)
+        setSidebarTab('files')
+        void openFolder(path)
+      } else {
+        void openPath(path)
+      }
+    })
     const offFileChanged = window.api.onFileChanged(() => {
       void handleExternalFileChange()
     })
@@ -1227,7 +1235,7 @@ export default function App(): React.JSX.Element {
       offClose()
       offUpdate()
     }
-  }, [recoveryReady, handleMenuAction, openPath, handleCloseRequest, handleExternalFileChange])
+  }, [recoveryReady, handleMenuAction, openFolder, openPath, setShowSidebar, handleCloseRequest, handleExternalFileChange])
 
   // Window-level drag & drop: open .md documents and append images dropped
   // outside of the editor.

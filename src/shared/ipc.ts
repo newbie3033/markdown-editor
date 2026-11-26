@@ -396,7 +396,7 @@ export interface InkMarkApi {
   onUpdateAvailable(callback: (update: UpdateInfo) => void): () => void
   openUpdateDownload(version: string, packageName: string): Promise<void>
   onMenuAction(callback: (action: MenuAction) => void): () => void
-  onOpenPath(callback: (path: string) => void): () => void
+  onOpenPath(callback: (path: string, isDirectory: boolean) => void): () => void
   onFileChanged(callback: (path: string) => void): () => void
   onCloseRequest(callback: () => void): () => void
   closeConfirmed(): void
