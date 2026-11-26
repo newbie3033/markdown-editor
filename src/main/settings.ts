@@ -1,10 +1,11 @@
 import { app } from 'electron'
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Lang } from '../shared/ipc'
+import { DEFAULT_RENDER_HTML, type Lang } from '../shared/ipc'
 
 interface AppSettings {
   locale?: Lang
+  renderHtml?: boolean
   checkUpdatesOnStartup?: boolean
 }
 
@@ -20,6 +21,11 @@ export function readSettings(): AppSettings {
     // Missing or malformed settings use the defaults.
   }
   return {}
+}
+
+export function htmlRenderingEnabled(): boolean {
+  const { renderHtml } = readSettings()
+  return typeof renderHtml === 'boolean' ? renderHtml : DEFAULT_RENDER_HTML
 }
 
 export function writeSettings(changes: AppSettings): void {

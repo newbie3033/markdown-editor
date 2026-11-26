@@ -2369,3 +2369,15 @@ body.export-page [data-type='html_comment'] {
   border: 0;
   border-top: 1px solid var(--border-soft);
 }
+
+.md-body > .html-preview-hidden {
+  display: none !important;
+}
+
+.md-body > .html-preview {
+  display: flow-root;
+}
+
+.md-body .html-preview summary {
+  cursor: pointer;
+}

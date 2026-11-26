@@ -4,7 +4,7 @@ import { DOMSerializer, type Node as ProseMirrorNode } from '@milkdown/prose/mod
 import { AllSelection } from '@milkdown/prose/state'
 import type { RemarkParser } from '@milkdown/kit/transformer'
 import { getMarkdown, getHTML, replaceAll as replaceAllRaw } from '@milkdown/kit/utils'
-import { DEFAULT_MERMAID_STYLE, isMermaidStyle, type FileVersion, type MenuAction, type SearchFlags, type ThemePreference, type UpdateInfo } from '../../shared/ipc'
+import { DEFAULT_MERMAID_STYLE, DEFAULT_RENDER_HTML, isMermaidStyle, type FileVersion, type MenuAction, type SearchFlags, type ThemePreference, type UpdateInfo } from '../../shared/ipc'
 const MarkdownEditor = lazy(() =>
   import('./components/MarkdownEditor').then((module) => ({ default: module.MarkdownEditor }))
 )
@@ -17,6 +17,7 @@ import { EditorContextMenu } from './components/EditorContextMenu'
 import { FindBar } from './components/FindBar'
 import { StorageManager } from './components/StorageManager'
 import { UpdateDialog } from './components/UpdateDialog'
+import { closeHtmlPreviewSource } from './lib/htmlPreview'
 import { buildHtmlDocument } from './lib/export'
 import { appendImage } from './lib/commands'
 import { findTextMatchesAsync, selectMatch } from './lib/search'
@@ -47,6 +48,19 @@ const isInFolder = (path: string, folder: string): boolean => {
   return path.startsWith(folder.endsWith(separator) ? folder : folder + separator)
 }
 
+function scrollToDocumentAnchor(editor: HTMLElement, id: string): void {
+  const target = Array.from(editor.querySelectorAll<HTMLElement>('[id], a[name]'))
+    .find(element => (element.id === id || element.getAttribute('name') === id) &&
+      !element.closest('.html-preview-hidden'))
+  if (!target) return
+  for (let parent = target.parentElement; parent && parent !== editor; parent = parent.parentElement) {
+    if (parent instanceof HTMLDetailsElement && !parent.querySelector(':scope > summary')?.contains(target)) {
+      parent.open = true
+    }
+  }
+  target.scrollIntoView({ behavior: 'instant', block: 'start' })
+}
+
 const sameFileVersion = (left: FileVersion | null, right: FileVersion | null): boolean =>
   left?.mtimeMs === right?.mtimeMs &&
   left?.size === right?.size &&
@@ -62,6 +76,8 @@ export default function App(): React.JSX.Element {
   const [markdown, setMarkdown] = useState<string>('')
   const [dirty, setDirty] = useState(false)
   const [sourceMode, setSourceMode] = useState(false)
+  const [renderHtml, setRenderHtml] = useState(DEFAULT_RENDER_HTML)
+  const renderHtmlChanged = useRef(false)
   // Panel visibility persists across sessions (same as the panel widths).
   const [showSidebar, setShowSidebar] = usePersistentBoolean('inkmark.showSidebar', true)
   const [showOutline, setShowOutline] = usePersistentBoolean('inkmark.showOutline', true)
@@ -908,8 +924,8 @@ export default function App(): React.JSX.Element {
       container.append(DOMSerializer.fromSchema(doc.type.schema).serializeFragment(doc.content))
       return container.innerHTML
     }) ?? ''
-    return buildHtmlDocument(body, title)
-  }, [title])
+    return buildHtmlDocument(body, title, renderHtml)
+  }, [renderHtml, title])
 
   const exportHtml = useCallback(async () => {
     try {
@@ -975,7 +991,12 @@ export default function App(): React.JSX.Element {
       const view = ctx.get(editorViewCtx)
       if (pos >= view.state.doc.content.size || view.state.doc.nodeAt(pos)?.type.name !== 'heading') return
       const heading = view.nodeDOM(pos)
-      if (heading instanceof HTMLElement) heading.scrollIntoView({ behavior: 'instant', block: 'start' })
+      if (!(heading instanceof HTMLElement)) return
+      if (heading.closest('.html-preview-hidden') && heading.id) {
+        scrollToDocumentAnchor(view.dom, heading.id)
+      } else {
+        heading.scrollIntoView({ behavior: 'instant', block: 'start' })
+      }
     })
   }, [])
 
@@ -1063,6 +1084,11 @@ export default function App(): React.JSX.Element {
         case 'search-folder':
           setShowSidebar(true)
           setSidebarTab('search')
+          break
+        case 'render-html-on':
+        case 'render-html-off':
+          renderHtmlChanged.current = true
+          setRenderHtml(action === 'render-html-on')
           break
         case 'toggle-source':
           toggleSourceMode()
@@ -1169,6 +1195,15 @@ export default function App(): React.JSX.Element {
       t
     ]
   )
+
+  useEffect(() => {
+    if (!recoveryReady) return
+    let active = true
+    void window.api.getRenderHtml().then(enabled => {
+      if (active && !renderHtmlChanged.current) setRenderHtml(enabled)
+    })
+    return () => { active = false }
+  }, [recoveryReady])
 
   // Subscribe to native menu events, OS "open with" events, and window-close
   // requests. Readiness is announced only after the listeners exist so the
@@ -1287,7 +1322,7 @@ export default function App(): React.JSX.Element {
       if (sourceMode) return
       event.preventDefault()
       const target = event.target instanceof Element
-        ? event.target.closest<HTMLElement>('.code-block-wrap[data-preview-kind]')
+        ? event.target.closest<HTMLElement>('.code-block-wrap[data-preview-kind], .html-preview, .html-preview-source')
         : null
       setCtxMenu({ ...position, previewSourceTarget: target })
     },
@@ -1305,7 +1340,19 @@ export default function App(): React.JSX.Element {
         await window.api.openExternal(href)
         return
       }
-      if (href === '' || href.startsWith('#')) return
+      if (href === '#') return
+      if (href.startsWith('#')) {
+        let id = href.slice(1)
+        try {
+          id = decodeURIComponent(id)
+        } catch {
+          // Match literal IDs containing a percent sign.
+        }
+        const editor = editorRef.current?.action(ctx => ctx.get(editorViewCtx).dom)
+        if (editor && id) scrollToDocumentAnchor(editor, id)
+        return
+      }
+      if (href === '') return
 
       let target = href
       if (target.startsWith('file://')) {
@@ -1446,6 +1493,7 @@ export default function App(): React.JSX.Element {
               <Suspense fallback={<div className="editor-loading" />}>
                 <MarkdownEditor
                   initialMarkdown={pendingContentRef.current ?? welcomeMarkdown(lang)}
+                  renderHtml={renderHtml}
                   onReady={handleEditorReady}
                   onChange={handleChange}
                   onOutline={handleOutline}
@@ -1510,9 +1558,16 @@ export default function App(): React.JSX.Element {
             editor={editorRef.current}
             readOnlySelection={ctxMenu.readOnlySelection}
             showPreviewSourceToggle={Boolean(ctxMenu.previewSourceTarget)}
-            previewSourceVisible={ctxMenu.previewSourceTarget?.dataset.sourceVisible === 'true'}
+            previewSourceVisible={ctxMenu.previewSourceTarget?.dataset.sourceVisible === 'true' ||
+              ctxMenu.previewSourceTarget?.classList.contains('html-preview-source') === true}
             onTogglePreviewSource={() => {
-              ctxMenu.previewSourceTarget?.dispatchEvent(new Event(TOGGLE_PREVIEW_SOURCE_EVENT))
+              const target = ctxMenu.previewSourceTarget
+              if (target?.classList.contains('html-preview-source')) {
+                editorRef.current?.action(ctx => {
+                  const view = ctx.get(editorViewCtx)
+                  view.dispatch(closeHtmlPreviewSource(view.state.tr))
+                })
+              } else target?.dispatchEvent(new Event(TOGGLE_PREVIEW_SOURCE_EVENT))
             }}
             onDeleteMermaid={ctxMenu.previewSourceTarget?.dataset.previewKind === 'mermaid' ? () => {
               ctxMenu.previewSourceTarget?.dispatchEvent(new Event(DELETE_MERMAID_EVENT))

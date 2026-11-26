@@ -4,6 +4,7 @@
 
 export const MERMAID_STYLES = ['soft', 'classic-blue', 'github', 'default', 'base'] as const
 export type MermaidStyle = (typeof MERMAID_STYLES)[number]
+export const DEFAULT_RENDER_HTML = true
 export const DEFAULT_MERMAID_STYLE: MermaidStyle = 'soft'
 
 export function isMermaidStyle(value: unknown): value is MermaidStyle {
@@ -233,6 +234,8 @@ export type MenuAction =
   | 'replace'
   | 'search-folder'
   | 'toggle-source'
+  | 'render-html-on'
+  | 'render-html-off'
   | 'toggle-sidebar'
   | 'toggle-articles'
   | 'toggle-file-tree'
@@ -295,6 +298,7 @@ export const IPC = {
   setDefaultReadOnly: 'app:set-default-read-only',
   getLocale: 'app:get-locale',
   getAppMenu: 'app:get-menu',
+  getRenderHtml: 'app:get-render-html',
   appMenuUpdated: 'app:menu-updated',
   activateAppMenu: 'app:activate-menu',
   setTheme: 'app:set-theme',
@@ -380,6 +384,7 @@ export interface InkMarkApi {
   clearRecoveryDraft(): Promise<void>
   confirmRecovery(fileName: string, updatedAt: number): Promise<RecoveryChoice>
   getLocale(): Promise<Lang>
+  getRenderHtml(): Promise<boolean>
   getAppMenu(): Promise<AppMenuItem[] | null>
   onAppMenuUpdated(callback: (items: AppMenuItem[]) => void): () => void
   activateAppMenu(id: number): Promise<void>
