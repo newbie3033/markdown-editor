@@ -793,7 +793,8 @@ async function listMarkdownRecursive(
   let entries
   try {
     entries = await fs.readdir(dir, { withFileTypes: true })
-  } catch {
+  } catch (error) {
+    if (depth === 0) throw error
     return []
   }
 
@@ -1479,6 +1480,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     ): Promise<SaveResult> => {
       const win = getWindow()
       content = assertTextPayload(content, 'document')
+      // Save As can explicitly recreate a missing original. If it reappears
+      // while the picker is open, the expected absence becomes a conflict.
+      const originalMissing = defaultPath != null && expectedVersion != null &&
+        !existsSync(assertPathAccess(defaultPath))
       const options = {
         title: t('dialog.saveFile'),
         defaultPath: defaultPath ?? 'untitled.md',
@@ -1496,7 +1501,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       // For a different target, the native dialog has already asked for
       // overwrite consent; snapshot its state now to catch changes occurring
       // after that confirmation and before the final rename.
-      const baseline = selectedCurrentPath ? expectedVersion : await currentVersion(path)
+      const originalBaseline = originalMissing ? null : expectedVersion
+      const baseline = selectedCurrentPath ? originalBaseline : await currentVersion(path)
       try {
         const version = await atomicWriteFile(
           path,

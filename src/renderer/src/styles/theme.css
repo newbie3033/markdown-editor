@@ -880,7 +880,27 @@ body.resizing {
   flex-shrink: 1;
 }
 .folder-header .icon-btn {
+  flex-shrink: 0;
+  margin-left: 0;
+}
+.folder-header .refresh-folder {
   margin-left: auto;
+  font-size: 16px;
+}
+.missing-document {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.missing-document button {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .loose-row {
