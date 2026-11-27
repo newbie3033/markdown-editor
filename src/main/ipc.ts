@@ -397,7 +397,7 @@ async function readDocument(path: string): Promise<ReadFileResult> {
     const version = toFileVersion(stat, sha256(data), decoded.utf8Bom)
     const content = decoded.content
     grantReferencedImages(path, content)
-    return { content, version }
+    return { path, content, version }
   } finally {
     await handle.close()
   }
