@@ -4,6 +4,7 @@ import { Decoration, DecorationSet } from '@milkdown/prose/view'
 import { $prose } from '@milkdown/kit/utils'
 import { TOGGLE_PREVIEW_SOURCE_EVENT } from './codeBlockCopy'
 import { renderHtmlGroups } from './documentHtml'
+import { wrapDocumentTables } from './documentTable'
 import { renderMath } from './math'
 
 const previewKey = new PluginKey<PreviewState>('documentHtmlPreview')
@@ -52,6 +53,7 @@ function createDecorations(doc: ProseMirrorNode, sourceBlock: number | null): De
     for (const math of content.querySelectorAll<HTMLElement>('span[data-type="math_inline"]')) {
       math.innerHTML = renderMath(math.dataset.value ?? math.textContent ?? '', false)
     }
+    wrapDocumentTables(content)
     const preview = document.createElement('div')
     preview.className = 'html-preview'
     preview.append(content)

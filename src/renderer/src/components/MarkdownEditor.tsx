@@ -9,7 +9,7 @@ import {
   remarkStringifyOptionsCtx
 } from '@milkdown/kit/core'
 import { Plugin } from '@milkdown/prose/state'
-import { tableEditing } from '@milkdown/prose/tables'
+import { TableView, tableEditing } from '@milkdown/prose/tables'
 import { $prose } from '@milkdown/kit/utils'
 import { commonmark, headingIdGenerator } from '@milkdown/kit/preset/commonmark'
 import { gfm, remarkGFMPlugin, tableEditingPlugin } from '@milkdown/kit/preset/gfm'
@@ -25,6 +25,7 @@ import mermaidGrammar from 'refractor/mermaid'
 import latexGrammar from 'refractor/latex'
 import { codeBlockCopyPlugin } from '../lib/codeBlockCopy'
 import { htmlPreviewPlugin, setHtmlPreview } from '../lib/htmlPreview'
+import { remarkTablePlugin } from '../lib/documentTable'
 import { localImageViewPlugin } from '../lib/imageView'
 import { createTyporaKeymap } from '../lib/typoraKeymap'
 import {
@@ -61,6 +62,7 @@ const tableTextSelectionPlugin = $prose(() => {
     ...spec,
     props: {
       ...spec.props,
+      nodeViews: { table: node => new TableView(node, 56) },
       handleDOMEvents: {
         ...events,
         mousedown(view, event) {
@@ -201,6 +203,7 @@ function InnerEditor({
             onOutlineRef.current(outlineWithoutHtmlComments(doc))
           })
         })
+        .use(remarkTablePlugin)
         .use(commonmark)
         .use(htmlPreviewPlugin)
         .use(htmlCommentSchema)

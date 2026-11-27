@@ -1,4 +1,5 @@
 import { renderDocumentHtml } from './documentHtml'
+import { wrapDocumentTables } from './documentTable'
 import themeCss from '../styles/theme.css?raw'
 import { renderDiagram, isMathLanguage, isMermaidLanguage } from './codeBlockCopy'
 import { selfContainedKatexCss } from './katexExportCss'
@@ -71,6 +72,7 @@ async function addRenderedPreviews(bodyHtml: string, renderHtml: boolean): Promi
   }
 
   if (renderHtml) renderDocumentHtml(template.content)
+  wrapDocumentTables(template.content)
 
   for (const inlineMath of Array.from(
     template.content.querySelectorAll<HTMLElement>('span[data-type="math_inline"]')

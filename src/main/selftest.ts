@@ -2363,6 +2363,15 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       '**Markdown inside**', '',
       '</details>', '',
       '<table><tr><td>Cell</td></tr></table>', '',
+      '<table id="merged-cells">',
+      '  <thead><tr><th colspan="2">Heading across two columns</th></tr></thead>',
+      '  <tbody><tr><td rowspan="2">', '',
+      '**Markdown in a merged cell**', '',
+      '```', '<td>Literal example</td>', '```', '',
+      '    </td><td align="right">First</td>',
+      '  </tr><tr><td>Second</td></tr></tbody>',
+      '</table>', '',
+      '| Left | Right |', '| :--- | ---: |', '| Text | 12 |', '',
       '<a href="javascript:void(0)" onclick="void(0)" class="html-preview">Unsafe link</a>', '',
       'Literal `<kbd>unrendered</kbd>`.', ''
     ].join('\n')
@@ -2389,12 +2398,25 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       const inline = editor?.querySelector('.html-preview span[style]')
       const exported = document.createElement('template')
       exported.innerHTML = await window.__inkmarkBuildExportHtml()
+      const merged = editor?.querySelector('#merged-cells')
+      const exportedMerged = exported.content.querySelector('#merged-cells')
+      const markdownTable = editor?.querySelector('table:has(tr[data-is-header])')
       return {
         inline: editor?.querySelector('.html-preview kbd')?.textContent === 'Ctrl' &&
           editor?.querySelector('.html-preview sup')?.textContent === '2' &&
           inline?.style.color === 'red' && !inline?.style.position &&
           inline?.querySelector('strong')?.textContent === 'bold',
         table: editor?.querySelector('.html-preview td')?.textContent === 'Cell',
+        mergedTable: merged?.rows[0]?.cells[0]?.colSpan === 2 &&
+          merged.rows[1]?.cells[0]?.rowSpan === 2 && merged.rows[2]?.cells[0]?.textContent === 'Second' &&
+          merged.rows[1]?.cells[0]?.querySelector('strong')?.textContent === 'Markdown in a merged cell' &&
+          merged.rows[1]?.cells[0]?.querySelector('pre code')?.textContent === '<td>Literal example</td>' &&
+          merged.rows[1]?.cells[1]?.textContent === 'First' &&
+          ['right', '-webkit-right'].includes(getComputedStyle(merged.rows[1].cells[1]).textAlign) &&
+          merged.parentElement?.classList.contains('tableWrapper') && getComputedStyle(merged).display === 'table',
+        markdownTable: markdownTable?.parentElement?.classList.contains('tableWrapper') &&
+          getComputedStyle(markdownTable).display === 'table' &&
+          getComputedStyle(markdownTable.rows[1].cells[1]).textAlign === 'right',
         anchor: jumped && anchor?.closest('.html-preview')?.querySelector('summary')?.textContent === '总方案目录',
         details: details?.open && details?.querySelector('p strong')?.textContent === 'Markdown inside',
         sanitized: !!unsafe && !unsafe.hasAttribute('onclick') &&
@@ -2402,6 +2424,8 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
         literal: editor?.querySelector('p code')?.textContent === '<kbd>unrendered</kbd>',
         export: !!exported.content.querySelector('details > summary') &&
           !!exported.content.querySelector('#groundsec01') &&
+          exportedMerged?.rows[0]?.cells[0]?.colSpan === 2 && exportedMerged.rows[1]?.cells[0]?.rowSpan === 2 &&
+          exportedMerged.rows[1]?.cells[1]?.textContent === 'First' &&
           !exported.content.querySelector('a[onclick], [data-inkmark-generated]')
       }
     })()`) as Record<string, boolean>

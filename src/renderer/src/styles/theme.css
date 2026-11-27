@@ -1534,10 +1534,6 @@ li.ProseMirror-selectednode::after {
   inset: -2px -2px -2px -32px;
 }
 
-.ProseMirror .tableWrapper {
-  overflow-x: auto;
-}
-
 .ProseMirror .column-resize-handle {
   z-index: 20;
   pointer-events: none;
@@ -2059,28 +2055,68 @@ li.ProseMirror-selectednode::after {
   opacity: 0.7;
 }
 
+.md-body .tableWrapper {
+  max-width: 100%;
+  margin: 0 0 16px;
+  overflow-x: auto;
+}
+
 .md-body table {
   border-collapse: collapse;
+  font-size: 0.925em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.md-body table:not([width]) {
   width: 100%;
-  margin: 0 0 16px;
-  display: block;
-  overflow-x: auto;
+}
+
+.md-body caption {
+  padding: 0 0 0.55em;
+  color: var(--text-secondary);
+  text-align: start;
 }
 
 .md-body th,
 .md-body td {
   border: 1px solid var(--border);
-  padding: 6px 13px;
-  text-align: left;
+  padding: 0.55em 0.85em;
+}
+
+.md-body :is(th, td):not([align]) {
+  text-align: start;
+}
+
+.md-body :is(th, td):not([valign]) {
+  vertical-align: middle;
+}
+
+.md-body :is(th, td) > :first-child {
+  margin-top: 0;
+}
+
+.md-body :is(th, td) > :last-child {
+  margin-bottom: 0;
 }
 
 .md-body th {
-  font-weight: 600;
-  background: var(--table-header-bg);
+  font-weight: 650;
 }
 
-.md-body tr:nth-child(2n) {
-  background: var(--bg-secondary);
+.md-body th:not([bgcolor]) {
+  background-color: var(--table-header-bg);
+}
+
+.md-body tbody > tr:nth-child(even):not([bgcolor]) {
+  background-color: color-mix(in srgb, var(--table-header-bg) 48%, transparent);
+}
+
+@media print {
+  .md-body .tableWrapper {
+    overflow: visible;
+  }
 }
 
 /* Task list */
