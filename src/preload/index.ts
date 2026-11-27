@@ -64,6 +64,8 @@ const api: InkMarkApi = {
   },
 
   readFile: (path: string): Promise<ReadFileResult> => ipcRenderer.invoke(IPC.readFile, path),
+  recordRecentFile: path => ipcRenderer.invoke(IPC.recordRecentFile, path),
+  readRecentFile: path => ipcRenderer.invoke(IPC.readRecentFile, path),
 
   getDocumentBaseUrl: (path: string): Promise<string> =>
     ipcRenderer.invoke(IPC.documentBaseUrl, path),
@@ -188,9 +190,10 @@ const api: InkMarkApi = {
     return () => ipcRenderer.removeListener(IPC.menuAction, listener)
   },
 
-  onOpenPath: (callback: (path: string, isDirectory: boolean) => void): (() => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, path: string, isDirectory = false): void =>
-      callback(path, isDirectory)
+  onOpenPath: callback => {
+    const listener = (
+      _event: Electron.IpcRendererEvent, path: string, isDirectory = false, fromHistory = false
+    ): void => callback(path, isDirectory, fromHistory)
     ipcRenderer.on(IPC.openPath, listener)
     return () => ipcRenderer.removeListener(IPC.openPath, listener)
   },

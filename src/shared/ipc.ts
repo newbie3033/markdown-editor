@@ -19,6 +19,7 @@ export interface AppMenuItem {
   type: string
   enabled: boolean
   checked: boolean
+  toolTip?: string
   accelerator?: string
   keepOpen?: boolean
   children?: AppMenuItem[]
@@ -262,6 +263,8 @@ export const IPC = {
   authorizeDroppedPath: 'file:authorize-dropped-path',
   documentBaseUrl: 'file:document-base-url',
   readFile: 'file:read',
+  recordRecentFile: 'file:recent-record',
+  readRecentFile: 'file:recent-read',
   writeFile: 'file:write',
   watchFile: 'file:watch',
   fileChanged: 'file:changed',
@@ -349,6 +352,8 @@ export interface InkMarkApi {
   /** Test harness only; throws unless INKMARK_SELFTEST=1. */
   queueSelfTestDroppedPath(path: string): void
   readFile(path: string): Promise<ReadFileResult>
+  recordRecentFile(path: string): Promise<void>
+  readRecentFile(path: string): Promise<ReadFileResult>
   getDocumentBaseUrl(path: string): Promise<string>
   writeFile(path: string, content: string, expectedVersion?: FileVersion | null): Promise<WriteFileResult>
   watchFile(path: string | null): Promise<void>
@@ -396,7 +401,7 @@ export interface InkMarkApi {
   onUpdateAvailable(callback: (update: UpdateInfo) => void): () => void
   openUpdateDownload(version: string, packageName: string): Promise<void>
   onMenuAction(callback: (action: MenuAction) => void): () => void
-  onOpenPath(callback: (path: string, isDirectory: boolean) => void): () => void
+  onOpenPath(callback: (path: string, isDirectory: boolean, fromHistory: boolean) => void): () => void
   onFileChanged(callback: (path: string) => void): () => void
   onCloseRequest(callback: () => void): () => void
   closeConfirmed(): void
