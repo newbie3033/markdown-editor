@@ -20,7 +20,7 @@ export function sourceOutline(parser: RemarkParser, source: string): OutlineItem
   return items
 }
 
-export function jumpToSourceHeading(textarea: HTMLTextAreaElement, pos: number): void {
+export function jumpToSourcePosition(textarea: HTMLTextAreaElement, pos: number, end = pos): void {
   const { paddingTop, paddingBottom, lineHeight } = getComputedStyle(textarea)
   // Measure with the same text wrapping as the editor, including long source lines.
   const measure = textarea.cloneNode(false) as HTMLTextAreaElement
@@ -36,10 +36,10 @@ export function jumpToSourceHeading(textarea: HTMLTextAreaElement, pos: number):
   })
   measure.value = `${textarea.value.slice(0, pos)}\u200b`
   textarea.after(measure)
-  const headingTop = measure.scrollHeight - parseFloat(paddingTop) - parseFloat(paddingBottom) - parseFloat(lineHeight)
+  const top = measure.scrollHeight - parseFloat(paddingTop) - parseFloat(paddingBottom) - parseFloat(lineHeight)
   measure.remove()
 
   textarea.focus({ preventScroll: true })
-  textarea.setSelectionRange(pos, pos)
-  textarea.scrollTop = headingTop
+  textarea.setSelectionRange(pos, end)
+  textarea.scrollTop = top
 }

@@ -50,6 +50,7 @@ export interface FileVersion {
 }
 
 export interface ReadFileResult {
+  path: string
   content: string
   version: FileVersion
 }

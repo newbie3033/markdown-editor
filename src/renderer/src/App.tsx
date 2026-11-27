@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { editorViewCtx, parserCtx, remarkCtx, serializerCtx, type Editor } from '@milkdown/kit/core'
 import { DOMSerializer, type Node as ProseMirrorNode } from '@milkdown/prose/model'
 import { AllSelection } from '@milkdown/prose/state'
@@ -20,7 +21,7 @@ import { UpdateDialog } from './components/UpdateDialog'
 import { closeHtmlPreviewSource } from './lib/htmlPreview'
 import { buildHtmlDocument } from './lib/export'
 import { appendImage } from './lib/commands'
-import { findTextMatchesAsync, selectMatch } from './lib/search'
+import { findInStringAsync, findTextMatchesAsync, selectMatch } from './lib/search'
 import { useResizableWidth } from './lib/useResizableWidth'
 import { usePersistentBoolean } from './lib/usePersistentBoolean'
 import {
@@ -37,7 +38,7 @@ import { useI18n, welcomeMarkdown } from './lib/i18n'
 import { DELETE_MERMAID_EVENT, TOGGLE_PREVIEW_SOURCE_EVENT } from './lib/codeBlockCopy'
 import { normalizeDisplayMath } from './lib/math'
 import { normalizeTextareaLineEndings, preserveMarkdownSource } from './lib/markdownSource'
-import { jumpToSourceHeading, sourceOutline } from './lib/sourceOutline'
+import { jumpToSourcePosition, sourceOutline } from './lib/sourceOutline'
 
 type SaveOutcome = 'saved' | 'canceled' | 'failed' | 'stale'
 
@@ -59,6 +60,25 @@ function scrollToDocumentAnchor(editor: HTMLElement, id: string): void {
     }
   }
   target.scrollIntoView({ behavior: 'instant', block: 'start' })
+}
+
+function decodeLinkPart(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+function setDocumentBase(href: string): void {
+  const existing = document.querySelector('base')
+  if (existing) {
+    existing.href = href
+  } else {
+    const base = document.createElement('base')
+    base.href = href
+    document.head.appendChild(base)
+  }
 }
 
 const sameFileVersion = (left: FileVersion | null, right: FileVersion | null): boolean =>
@@ -117,7 +137,10 @@ export default function App(): React.JSX.Element {
   const outlineSidebar = useResizableWidth('inkmark.outlineWidth')
 
   const editorRef = useRef<Editor | null>(null)
+  const editorScrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const readingPositions = useRef({ visual: new Map<string, number>(), source: new Map<string, number>() })
+  const documentLoadRef = useRef<symbol | null>(null)
   const markdownRef = useRef(markdown)
   const filePathRef = useRef(filePath)
   filePathRef.current = filePath
@@ -190,6 +213,23 @@ export default function App(): React.JSX.Element {
     updateMarkdown(content)
     syncVisualEditor(content)
   }, [syncVisualEditor, updateMarkdown])
+
+  const rememberReadingPosition = useCallback(() => {
+    const path = filePathRef.current
+    if (!path) return
+    const source = sourceModeRef.current
+    const scroller = source ? textareaRef.current : editorScrollRef.current
+    const positions = source ? readingPositions.current.source : readingPositions.current.visual
+    if (scroller) positions.set(path, scroller.scrollTop)
+  }, [])
+
+  const restoreReadingPosition = useCallback(() => {
+    const path = filePathRef.current
+    const source = sourceModeRef.current
+    const scroller = source ? textareaRef.current : editorScrollRef.current
+    const positions = source ? readingPositions.current.source : readingPositions.current.visual
+    if (scroller) scroller.scrollTop = path ? positions.get(path) ?? 0 : 0
+  }, [])
 
   // Recover the last unsaved revision before accepting queued "open with"
   // paths. A subsequently opened file will go through the normal save/discard
@@ -310,7 +350,7 @@ export default function App(): React.JSX.Element {
     if (sourceModeRef.current) {
       const textarea = textareaRef.current
       if (textarea) {
-        textarea.focus()
+        textarea.focus({ preventScroll: true })
         textarea.setSelectionRange(0, 0)
       }
       return
@@ -320,13 +360,27 @@ export default function App(): React.JSX.Element {
     })
   }, [])
 
+  const displayDocument = useCallback((content: string, focus: boolean) => {
+    // The controlled textarea needs its new value before it can be scrolled.
+    if (sourceModeRef.current) flushSync(() => setDocumentContent(content))
+    else setDocumentContent(content)
+    if (focus) focusEditor()
+    restoreReadingPosition()
+  }, [focusEditor, restoreReadingPosition, setDocumentContent])
+
+  const changeSourceMode = useCallback((value: boolean) => {
+    rememberReadingPosition()
+    sourceModeRef.current = value
+    flushSync(() => setSourceMode(value))
+    restoreReadingPosition()
+  }, [rememberReadingPosition, restoreReadingPosition])
+
   const setReadOnlyMode = useCallback(
     (value: boolean) => {
       if (value && sourceModeRef.current) {
         // Sync the textarea content back and leave source mode first.
         syncVisualEditor(markdownRef.current)
-        sourceModeRef.current = false
-        setSourceMode(false)
+        changeSourceMode(false)
       }
       setCtxMenu(null)
       if (value) setReplaceOpen(false)
@@ -335,7 +389,7 @@ export default function App(): React.JSX.Element {
         ctx.get(editorViewCtx).setProps({ editable: () => !value })
       })
     },
-    [syncVisualEditor]
+    [changeSourceMode, syncVisualEditor]
   )
 
   // Resolve relative local resources through the main process's constrained
@@ -345,14 +399,7 @@ export default function App(): React.JSX.Element {
     if (path) {
       const href = await window.api.getDocumentBaseUrl(path)
       if (filePathRef.current !== path) return
-      const existing = document.querySelector('base')
-      if (existing) {
-        existing.setAttribute('href', href)
-      } else {
-        const base = document.createElement('base')
-        base.setAttribute('href', href)
-        document.head.appendChild(base)
-      }
+      setDocumentBase(href)
     } else {
       document.querySelector('base')?.remove()
     }
@@ -656,20 +703,27 @@ export default function App(): React.JSX.Element {
 
   const loadDocument = useCallback(
     async (path: string, content: string, version: FileVersion) => {
+      const load = Symbol()
+      documentLoadRef.current = load
+      const previousPath = filePathRef.current
+      const href = await window.api.getDocumentBaseUrl(path)
+      if (documentLoadRef.current !== load || filePathRef.current !== previousPath) return
+
+      rememberReadingPosition()
       setMissingPath(null)
       setFilePath(path)
       filePathRef.current = path
       fileVersionRef.current = version
       ignoredExternalVersionRef.current = null
-      await updateDocumentBase(path)
+      setDocumentBase(href)
       cleanContentRef.current = content
-      setDocumentContent(content)
       setDirty(false)
       addToOpenFiles(path)
       rememberOpenedFile(path)
-      focusEditor()
+      displayDocument(content, true)
+      return load
     },
-    [addToOpenFiles, focusEditor, rememberOpenedFile, setDocumentContent, updateDocumentBase]
+    [addToOpenFiles, displayDocument, rememberOpenedFile, rememberReadingPosition]
   )
 
   const locateDocument = useCallback(async () => {
@@ -730,7 +784,7 @@ export default function App(): React.JSX.Element {
         // The selected file may be the current document and may just have been
         // saved by the confirmation flow, so read it again after confirmation.
         const latest = await window.api.readFile(result.path)
-        await loadDocument(result.path, latest.content, latest.version)
+        await loadDocument(latest.path, latest.content, latest.version)
       }
     } catch (error) {
       console.error('Failed to open file', error)
@@ -739,7 +793,7 @@ export default function App(): React.JSX.Element {
   }, [confirmBeforeReplace, loadDocument, reportSaveError, t])
 
   const openPath = useCallback(
-    async (path: string, fromHistory = false) => {
+    async (path: string, fromHistory = false, anchor?: string) => {
       try {
         if (!(await confirmBeforeReplace())) {
           if (!fromHistory && path !== filePathRef.current && !openFilesRef.current.includes(path)) {
@@ -748,7 +802,11 @@ export default function App(): React.JSX.Element {
           return
         }
         const result = fromHistory ? await window.api.readRecentFile(path) : await window.api.readFile(path)
-        await loadDocument(path, result.content, result.version)
+        const load = await loadDocument(result.path, result.content, result.version)
+        if (anchor && load && documentLoadRef.current === load && filePathRef.current === result.path) {
+          const editor = editorRef.current?.action(ctx => ctx.get(editorViewCtx).dom)
+          if (editor) scrollToDocumentAnchor(editor, anchor)
+        }
       } catch (error) {
         console.error('Failed to open file', error)
         await reportSaveError(t('error.openFailed'), error)
@@ -802,15 +860,19 @@ export default function App(): React.JSX.Element {
       try {
         if (!(await confirmBeforeReplace())) return
         const result = await window.api.readFile(path)
-        await loadDocument(path, result.content, result.version)
-        if (matchIndex >= 0) {
-          const editor = editorRef.current
-          if (editor) {
-            const matches = await findTextMatchesAsync(editor, query, flags)
-            const match = matches[matchIndex] ?? matches[matches.length - 1]
-            if (match) selectMatch(editor, match)
-          }
-        }
+        const load = await loadDocument(result.path, result.content, result.version)
+        if (!load || matchIndex < 0) return
+
+        const textarea = textareaRef.current
+        const editor = editorRef.current
+        const matches = textarea
+          ? await findInStringAsync(textarea.value, query, flags)
+          : editor ? await findTextMatchesAsync(editor, query, flags) : []
+        const match = matches[matchIndex] ?? matches[matches.length - 1]
+        if (!match || documentLoadRef.current !== load || filePathRef.current !== result.path ||
+          textareaRef.current !== textarea || markdownRef.current !== result.content) return
+        if (textarea) jumpToSourcePosition(textarea, match.from, match.to)
+        else if (editor) selectMatch(editor, match)
       } catch (error) {
         console.error('Failed to open search result', error)
         await reportSaveError(t('error.openFailed'), error)
@@ -885,42 +947,43 @@ export default function App(): React.JSX.Element {
       await window.api.releaseDocumentAccess(path).catch((error) =>
         console.error('Failed to release document access', error)
       )
-      if (isCurrent) {
+      if (filePathRef.current === path) {
         // Close the document: reset to a new untitled document.
+        rememberReadingPosition()
         setFilePath(null)
         filePathRef.current = null
         fileVersionRef.current = null
         setDirty(false)
         cleanContentRef.current = ''
-        setDocumentContent('')
+        displayDocument('', false)
       }
     },
-    [confirmBeforeReplace, setDocumentContent]
+    [confirmBeforeReplace, displayDocument, rememberReadingPosition]
   )
 
   const newDocument = useCallback(async () => {
     if (!(await confirmBeforeReplace())) return
+    rememberReadingPosition()
     setFilePath(null)
     filePathRef.current = null
     fileVersionRef.current = null
     setDirty(false)
     cleanContentRef.current = ''
-    setDocumentContent('')
-    focusEditor()
-  }, [confirmBeforeReplace, focusEditor, setDocumentContent])
+    displayDocument('', true)
+  }, [confirmBeforeReplace, displayDocument, rememberReadingPosition])
 
   // File → Open Welcome Page: show the welcome document as an untitled page.
   const showWelcome = useCallback(async () => {
     if (!(await confirmBeforeReplace())) return
     const welcome = welcomeMarkdown(lang)
+    rememberReadingPosition()
     setFilePath(null)
     filePathRef.current = null
     fileVersionRef.current = null
     setDirty(false)
     cleanContentRef.current = welcome
-    setDocumentContent(welcome)
-    focusEditor()
-  }, [confirmBeforeReplace, focusEditor, lang, setDocumentContent])
+    displayDocument(welcome, true)
+  }, [confirmBeforeReplace, displayDocument, lang, rememberReadingPosition])
 
   const buildDocumentHtml = useCallback(() => {
     const body = editorRef.current?.action(ctx => {
@@ -990,7 +1053,7 @@ export default function App(): React.JSX.Element {
   const navigateOutline = useCallback((pos: number) => {
     if (sourceModeRef.current) {
       const textarea = textareaRef.current
-      if (textarea) jumpToSourceHeading(textarea, pos)
+      if (textarea) jumpToSourcePosition(textarea, pos)
       return
     }
     editorRef.current?.action((ctx) => {
@@ -1011,9 +1074,8 @@ export default function App(): React.JSX.Element {
     // Snapshot pending visual edits synchronously before switching views.
     if (next) updateEditedContent(getActiveContent())
     else syncVisualEditor(markdownRef.current)
-    sourceModeRef.current = next
-    setSourceMode(next)
-  }, [getActiveContent, syncVisualEditor, updateEditedContent])
+    changeSourceMode(next)
+  }, [changeSourceMode, getActiveContent, syncVisualEditor, updateEditedContent])
 
   const getFocusedEditorSelection = useCallback((): string | null => {
     if (sourceModeRef.current) {
@@ -1356,19 +1418,16 @@ export default function App(): React.JSX.Element {
       }
       if (href === '#') return
       if (href.startsWith('#')) {
-        let id = href.slice(1)
-        try {
-          id = decodeURIComponent(id)
-        } catch {
-          // Match literal IDs containing a percent sign.
-        }
+        const id = decodeLinkPart(href.slice(1))
         const editor = editorRef.current?.action(ctx => ctx.get(editorViewCtx).dom)
         if (editor && id) scrollToDocumentAnchor(editor, id)
         return
       }
       if (href === '') return
 
-      let target = href
+      const fragmentIndex = href.indexOf('#')
+      const anchor = fragmentIndex < 0 ? undefined : decodeLinkPart(href.slice(fragmentIndex + 1))
+      let target = (fragmentIndex < 0 ? href : href.slice(0, fragmentIndex)).split('?')[0]
       if (target.startsWith('file://')) {
         try {
           target = decodeURIComponent(new URL(target).pathname)
@@ -1376,20 +1435,20 @@ export default function App(): React.JSX.Element {
         } catch {
           return
         }
+      } else {
+        target = decodeLinkPart(target)
       }
-      const clean = target.split('#')[0].split('?')[0]
-      if (!clean) return
+      if (!target) return
 
-      let resolved = clean
+      let resolved = target
       if (!isAbsolutePath(resolved)) {
         const dir = filePathRef.current ? dirNameFromPath(filePathRef.current) : null
         if (!dir) return
         resolved = `${dir}/${resolved}`
       }
-      const exists = await window.api.pathExists(resolved)
-      if (!exists) return
+      if (!(await window.api.pathExists(resolved))) return
       if (isMarkdownFileName(resolved)) {
-        await openPath(resolved)
+        await openPath(resolved, false, anchor)
       } else {
         await window.api.openLocalPath(resolved)
       }
@@ -1498,6 +1557,7 @@ export default function App(): React.JSX.Element {
         )}
         <div
           className="editor-scroll"
+          ref={editorScrollRef}
           onClick={onEditorClick}
           onContextMenu={onEditorContextMenu}
           onScroll={() => setCtxMenu(null)}
