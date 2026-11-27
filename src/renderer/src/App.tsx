@@ -650,6 +650,10 @@ export default function App(): React.JSX.Element {
     return true
   }, [clearRecoveryDraft, hasUnsavedChanges, save, t])
 
+  const rememberOpenedFile = useCallback((path: string) => {
+    void window.api.recordRecentFile(path).catch(console.error)
+  }, [])
+
   const loadDocument = useCallback(
     async (path: string, content: string, version: FileVersion) => {
       setMissingPath(null)
@@ -662,9 +666,10 @@ export default function App(): React.JSX.Element {
       setDocumentContent(content)
       setDirty(false)
       addToOpenFiles(path)
+      rememberOpenedFile(path)
       focusEditor()
     },
-    [addToOpenFiles, focusEditor, setDocumentContent, updateDocumentBase]
+    [addToOpenFiles, focusEditor, rememberOpenedFile, setDocumentContent, updateDocumentBase]
   )
 
   const locateDocument = useCallback(async () => {
@@ -701,6 +706,7 @@ export default function App(): React.JSX.Element {
       setFilePath(path)
       setDirty(keepEdits && buffer !== content)
       setMissingPath(null)
+      rememberOpenedFile(path)
       if (path !== original) {
         setOpenFiles((prev) => prev.filter((entry) => entry !== original))
         addToOpenFiles(path)
@@ -709,7 +715,7 @@ export default function App(): React.JSX.Element {
     } catch (error) {
       await reportSaveError(t('error.openFailed'), error)
     }
-  }, [addToOpenFiles, getActiveContent, missingPath, reportSaveError, setDocumentContent, t])
+  }, [addToOpenFiles, getActiveContent, missingPath, rememberOpenedFile, reportSaveError, setDocumentContent, t])
 
   const openFile = useCallback(async () => {
     try {
@@ -733,15 +739,15 @@ export default function App(): React.JSX.Element {
   }, [confirmBeforeReplace, loadDocument, reportSaveError, t])
 
   const openPath = useCallback(
-    async (path: string) => {
+    async (path: string, fromHistory = false) => {
       try {
         if (!(await confirmBeforeReplace())) {
-          if (path !== filePathRef.current && !openFilesRef.current.includes(path)) {
+          if (!fromHistory && path !== filePathRef.current && !openFilesRef.current.includes(path)) {
             await window.api.releaseDocumentAccess(path).catch(() => undefined)
           }
           return
         }
-        const result = await window.api.readFile(path)
+        const result = fromHistory ? await window.api.readRecentFile(path) : await window.api.readFile(path)
         await loadDocument(path, result.content, result.version)
       } catch (error) {
         console.error('Failed to open file', error)
@@ -1211,13 +1217,13 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (!recoveryReady) return
     const offMenu = window.api.onMenuAction(handleMenuAction)
-    const offOpen = window.api.onOpenPath((path, isDirectory) => {
+    const offOpen = window.api.onOpenPath((path, isDirectory, fromHistory) => {
       if (isDirectory) {
         setShowSidebar(true)
         setSidebarTab('files')
         void openFolder(path)
       } else {
-        void openPath(path)
+        void openPath(path, fromHistory)
       }
     })
     const offFileChanged = window.api.onFileChanged(() => {

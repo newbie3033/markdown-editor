@@ -1,11 +1,13 @@
 import { BaseWindow, BrowserWindow, Menu, MenuItemConstructorOptions, nativeTheme, shell } from 'electron'
+import { basename } from 'node:path'
 import { DEFAULT_MERMAID_STYLE, IPC, MERMAID_STYLES, REPOSITORY_URL, type AppMenuItem, type Lang, type MenuAction, type MermaidStyle } from '../shared/ipc'
 import { getLocale, t } from './i18n'
-import { htmlRenderingEnabled, writeSettings } from './settings'
+import { getRecentFiles, htmlRenderingEnabled, writeSettings } from './settings'
 import { automaticUpdateChecksEnabled } from './update'
 
 let getWindowRef: () => BrowserWindow | null = () => null
 let requestUpdateCheck: () => void
+let requestRecentFile: (path: string) => void
 let readOnlyMode = false
 let defaultReadOnly = false
 let mermaidStyle = DEFAULT_MERMAID_STYLE
@@ -37,6 +39,18 @@ export function setMermaidStyle(value: MermaidStyle): void {
 function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
   const isMac = process.platform === 'darwin'
   const modifier = isMac ? 'Command' : 'Ctrl'
+  const recentFiles = getRecentFiles().map(path => {
+    const label = basename(path)
+    const characters = Array.from(label)
+    const visibleLabel = process.platform !== 'linux' && characters.length > 40
+      ? `${characters.slice(0, 39).join('')}…`
+      : label
+    return {
+      label: process.platform === 'win32' ? visibleLabel.replaceAll('&', '&&') : visibleLabel,
+      toolTip: path,
+      click: () => requestRecentFile(path)
+    }
+  })
 
   return [
     ...(isMac
@@ -64,6 +78,10 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
         { label: t('menu.welcome'), click: (_i, w) => send('welcome', w ?? getWindowRef()) },
         { type: 'separator' },
         { label: t('menu.open'), accelerator: `${modifier}+O`, click: (_i, w) => send('open', w ?? getWindowRef()) },
+        {
+          label: t('menu.openRecent'),
+          submenu: recentFiles.length > 0 ? recentFiles : [{ label: t('menu.noRecentFiles'), enabled: false }]
+        },
         {
           label: t('menu.openFolder'),
           accelerator: `${modifier}+Shift+O`,
@@ -290,9 +308,14 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
   ]
 }
 
-export function buildMenu(getWindow: () => BrowserWindow | null, checkForUpdates: () => void): void {
+export function buildMenu(
+  getWindow: () => BrowserWindow | null,
+  checkForUpdates: () => void,
+  openRecentFile: (path: string) => void
+): void {
   getWindowRef = getWindow
   requestUpdateCheck = checkForUpdates
+  requestRecentFile = openRecentFile
   rebuildMenu()
 }
 
@@ -313,6 +336,7 @@ function describeMenu(menu: Menu, keepOpen = false): AppMenuItem[] {
     type: item.type,
     enabled: item.enabled,
     checked: item.checked,
+    toolTip: item.toolTip || undefined,
     accelerator: item.accelerator ?? undefined,
     keepOpen,
     children: item.submenu && describeMenu(

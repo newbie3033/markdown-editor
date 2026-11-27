@@ -51,7 +51,7 @@ import {
   type WriteFileResult
 } from '../shared/ipc'
 import { getLocale, setLocale, t } from './i18n'
-import { htmlRenderingEnabled } from './settings'
+import { getRecentFiles, htmlRenderingEnabled, recordRecentFile } from './settings'
 import { activateAppMenu, getAppMenu, rebuildMenu, setDefaultReadOnly, setMermaidStyle, setReadOnlyMode } from './menu'
 import { openUpdateDownload } from './update'
 
@@ -1543,6 +1543,23 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const authorized = assertPathAccess(path)
     grantDocumentAccess(authorized)
     return readDocument(authorized)
+  })
+
+  handle(IPC.recordRecentFile, (_event, path: string): void => {
+    const canonical = assertPathAccess(path)
+    if (!documentAssetDirectories.has(canonical)) throw new Error('Path is not an open document')
+    if (recordRecentFile(canonical)) rebuildMenu()
+  })
+
+  handle(IPC.readRecentFile, async (_event, path: string): Promise<ReadFileResult> => {
+    // A recent path is a capability for that document only, including after a restart.
+    if (!getRecentFiles().includes(path) || canonicalPath(path) !== path) {
+      throw new Error('Path is not an authorized recent file')
+    }
+    if (!statSync(path).isFile()) throw new Error('The recent path is no longer a file')
+    const result = await readDocument(path)
+    grantDocumentAccess(path)
+    return result
   })
 
   handle(IPC.writeFile, async (

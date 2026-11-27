@@ -38,6 +38,7 @@ let mainWindow: BrowserWindow | null = null
 interface OpenTarget {
   path: string
   isDirectory: boolean
+  fromHistory?: boolean
 }
 
 // Hold launch targets until the renderer has registered its IPC listeners.
@@ -194,15 +195,15 @@ function requestUpdateCheck(): void {
 }
 
 function sendOpenPath(target: OpenTarget): void {
-  const { path, isDirectory } = target
+  const { path, isDirectory, fromHistory } = target
   if (isDirectory) grantDirectoryAccess(path)
-  else grantDocumentAccess(path)
+  else if (!fromHistory) grantDocumentAccess(path)
   const win = mainWindow
   if (win) {
     if (win.isMinimized()) win.restore()
     win.focus()
     if (rendererReady) {
-      win.webContents.send(IPC.openPath, path, isDirectory)
+      win.webContents.send(IPC.openPath, path, isDirectory, fromHistory)
       return
     }
   } else if (app.isReady()) {
@@ -248,7 +249,9 @@ if (!gotSingleInstanceLock) {
     initLocale(rebuildMenu)
     registerLocalProtocols()
     registerIpc(() => mainWindow)
-    buildMenu(() => mainWindow, requestUpdateCheck)
+    buildMenu(() => mainWindow, requestUpdateCheck, path => {
+      sendOpenPath({ path, isDirectory: false, fromHistory: true })
+    })
 
     // The renderer reports when its IPC listeners are registered; flush any
     // "open with" paths that were queued while the window was starting.
@@ -262,8 +265,8 @@ if (!gotSingleInstanceLock) {
       const wasReady = rendererReady
       rendererReady = true
       rendererGone = false
-      for (const { path, isDirectory } of pendingOpenPaths.splice(0)) {
-        current.webContents.send(IPC.openPath, path, isDirectory)
+      for (const { path, isDirectory, fromHistory } of pendingOpenPaths.splice(0)) {
+        current.webContents.send(IPC.openPath, path, isDirectory, fromHistory)
       }
       if (pendingUpdateCheck) {
         pendingUpdateCheck = false
