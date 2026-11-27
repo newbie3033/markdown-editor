@@ -9,9 +9,10 @@ import {
   remarkStringifyOptionsCtx
 } from '@milkdown/kit/core'
 import { Plugin } from '@milkdown/prose/state'
+import { tableEditing } from '@milkdown/prose/tables'
 import { $prose } from '@milkdown/kit/utils'
 import { commonmark, headingIdGenerator } from '@milkdown/kit/preset/commonmark'
-import { gfm, remarkGFMPlugin } from '@milkdown/kit/preset/gfm'
+import { gfm, remarkGFMPlugin, tableEditingPlugin } from '@milkdown/kit/preset/gfm'
 import { history } from '@milkdown/kit/plugin/history'
 import { clipboard } from '@milkdown/kit/plugin/clipboard'
 import { cursor } from '@milkdown/kit/plugin/cursor'
@@ -51,6 +52,34 @@ import {
   remarkHtmlCommentPlugin,
   textWithoutHtmlComments
 } from '../lib/htmlComment'
+
+const tableTextSelectionPlugin = $prose(() => {
+  const { spec } = tableEditing({ allowTableNodeSelection: true })
+  const events = spec.props?.handleDOMEvents
+
+  return new Plugin({
+    ...spec,
+    props: {
+      ...spec.props,
+      handleDOMEvents: {
+        ...events,
+        mousedown(view, event) {
+          // Let text drags use the normal ProseMirror selection across cells.
+          const target = event.target
+          if (
+            event.button === 0 &&
+            !event.shiftKey &&
+            target instanceof Element &&
+            target.closest('td > p, th > p')
+          ) {
+            return false
+          }
+          return events?.mousedown?.call(this, view, event)
+        }
+      }
+    }
+  })
+})
 
 interface EditorProps {
   initialMarkdown: string
@@ -179,7 +208,8 @@ function InnerEditor({
         .use(htmlCommentInputRule)
         .use(htmlCommentClosePlugin)
         .use(htmlCommentKeymap)
-        .use(gfm)
+        .use(gfm.filter(plugin => plugin !== tableEditingPlugin))
+        .use(tableTextSelectionPlugin)
         .use(remarkMathPlugin)
         .use(remarkMathBlockPlugin)
         .use(mathInlineSchema)

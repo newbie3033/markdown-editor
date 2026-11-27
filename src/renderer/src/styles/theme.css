@@ -1553,6 +1553,11 @@ li.ProseMirror-selectednode::after {
   cursor: col-resize;
 }
 
+.ProseMirror td,
+.ProseMirror th {
+  position: relative;
+}
+
 .ProseMirror .selectedCell::after {
   z-index: 2;
   content: '';
