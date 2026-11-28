@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="168" height="46" viewBox="0 0 168 46">
+  <style>
+    svg { color: #785612; --paper: #fff6df; --mark: #f6ce6d; --rule: #c4ad82 }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #f1cf86; --paper: #342b1c; --mark: #674b23; --rule: #897655 }
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .match { animation: next 2.8s both }
+      .count { animation: count 2.8s steps(1) both }
+    }
+    @keyframes next { 0%, 48% { transform: translate(-28px, -19px) } 65% { transform: none } }
+    @keyframes count { 0%, 48% { transform: translateY(14px) } 65% { transform: none } }
+  </style>
+  <rect x="1" y="9" width="73" height="28" rx="6" fill="var(--paper)"/>
+  <g stroke="currentColor" stroke-width="1.8" fill="none">
+    <circle cx="13" cy="21" r="4.5"/><path d="m16.4 24.4 4 4"/>
+  </g>
+  <g fill="currentColor" font-family="sans-serif" font-size="12">
+    <text x="27" y="27">Aa</text>
+    <svg x="51" y="16" width="21" height="14">
+      <g class="count" font-size="10"><text y="-3">1/2</text><text y="11">2/2</text></g>
+    </svg>
+  </g>
+  <path d="M115 14h44m-72 19h20m36 0h16" fill="none" stroke="var(--rule)" stroke-width="2.5" stroke-linecap="round"/>
+  <rect class="match" x="113" y="25" width="23" height="16" rx="3" fill="var(--mark)"/>
+  <g fill="currentColor" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="600">
+    <text x="96.5" y="18">Aa</text><text x="124.5" y="37">Aa</text>
+  </g>
+</svg>

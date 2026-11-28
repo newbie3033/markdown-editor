@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="168" height="46" viewBox="0 0 168 46">
+  <style>
+    svg { color: #245597; --paper: #eef5ff; --rule: #a6c2e6 }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #afd1ff; --paper: #192c46; --rule: #557399 }
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .typed { animation: type 1.5s steps(5) both }
+      .heading { animation: render 1s 1.4s both }
+    }
+    @keyframes type { from { width: 0 } to { width: 53px } }
+    @keyframes render { from { opacity: .15; transform: translateY(3px) } }
+  </style>
+  <defs><clipPath id="reveal"><rect class="typed" x="10" y="5" width="53" height="32"/></clipPath></defs>
+  <rect x="1" y="3" width="72" height="40" rx="6" fill="var(--paper)"/>
+  <g clip-path="url(#reveal)" fill="currentColor" font-family="monospace" font-size="14">
+    <text x="10" y="28">## Aa</text>
+  </g>
+  <path d="M80 23h14m-5-5 5 5-5 5" fill="none" stroke="var(--rule)" stroke-width="2"/>
+  <g class="heading">
+    <text x="106" y="26" fill="currentColor" font-family="sans-serif" font-size="25" font-weight="700">Aa</text>
+    <path d="M107 33h52m-52 6h35" stroke="var(--rule)" stroke-width="2" stroke-linecap="round"/>
+  </g>
+</svg>

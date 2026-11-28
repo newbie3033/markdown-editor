@@ -217,9 +217,7 @@ const api: InkMarkApi = {
     ipcRenderer.send(IPC.closeConfirmed)
   },
 
-  rendererReady: (): void => {
-    ipcRenderer.send(IPC.rendererReady)
-  }
+  rendererReady: () => ipcRenderer.invoke(IPC.rendererReady)
 }
 
 contextBridge.exposeInMainWorld('api', api)

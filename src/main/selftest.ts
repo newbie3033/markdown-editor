@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { IPC, REPOSITORY_URL } from '../shared/ipc'
 import { grantDirectoryAccess } from './ipc'
+import { t } from './i18n'
 
 const TEST_DIR = '/tmp/inkmark-selftest'
 const results: string[] = []
@@ -191,27 +192,6 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
         JSON.stringify(startup)
       )
     }
-
-    // 0b. Checkbox styling: CSS-drawn checkmark (no text glyph).
-    const checkboxStyle = (await js(`(async () => {
-      const li = document.querySelector('.md-body li[data-item-type="task"][data-checked="true"]')
-      if (!li) return { ok: false }
-      const st = getComputedStyle(li, '::after')
-      return {
-        ok: true,
-        content: st.content,
-        borderRightWidth: st.borderRightWidth,
-        transformed: st.transform !== 'none'
-      }
-    })()`)) as { ok?: boolean; content?: string; borderRightWidth?: string; transformed?: boolean }
-    check(
-      'checkbox uses css-drawn checkmark',
-      checkboxStyle?.ok === true &&
-        !(checkboxStyle?.content ?? '').includes('✓') &&
-        checkboxStyle?.borderRightWidth === '2px' &&
-        checkboxStyle?.transformed === true,
-      JSON.stringify(checkboxStyle)
-    )
 
     // 1. Locale roundtrip.
     const locale = (await js(`window.api.getLocale()`)) as string
@@ -1595,6 +1575,26 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       win.webContents.send(IPC.menuAction, 'toggle-source')
       await sleep(400)
     }
+    const checkboxStyle = (await js(`(async () => {
+      const li = document.querySelector('.md-body li[data-item-type="task"][data-checked="true"]')
+      if (!li) return { ok: false }
+      const st = getComputedStyle(li, '::after')
+      return {
+        ok: true,
+        content: st.content,
+        borderRightWidth: st.borderRightWidth,
+        transformed: st.transform !== 'none'
+      }
+    })()`)) as { ok?: boolean; content?: string; borderRightWidth?: string; transformed?: boolean }
+    check(
+      'checkbox uses css-drawn checkmark',
+      checkboxStyle?.ok === true &&
+        !(checkboxStyle?.content ?? '').includes('✓') &&
+        checkboxStyle?.borderRightWidth === '2px' &&
+        checkboxStyle?.transformed === true,
+      JSON.stringify(checkboxStyle)
+    )
+
     const taskClick = (await js(`(async () => {
       const task = () => document.querySelector('.md-body li[data-item-type="task"]')
       if (!task()) return { found: false }
@@ -3061,7 +3061,7 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     )
     shell.openExternal = originalOpenExternal
 
-    // 17. Welcome page: first launch only, reopenable via File menu.
+    // 17. Welcome page: first launch only, reopenable via Help.
     // 16c. Panel open/close state persists across restarts: hide both panels,
     // then verify they stay hidden after the renderer reload below.
     win.webContents.send(IPC.menuAction, 'toggle-sidebar')
@@ -3087,6 +3087,20 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       modeMenuItem('default-mode-readonly')?.checked === true && currentModeBeforeReload === 'true'
     )
     await js(`localStorage.setItem('inkmark.welcomeSeen', '1'); true`)
+    // A final blank document can hide a welcome heading that was briefly mounted.
+    debuggerSession.attach()
+    await debuggerSession.sendCommand('Page.enable')
+    await debuggerSession.sendCommand('Page.addScriptToEvaluateOnNewDocument', {
+      source: `window.startupHeading = null;
+        const observer = new MutationObserver(() => {
+          const heading = document.querySelector('.ProseMirror h1');
+          if (heading) {
+            window.startupHeading = heading.textContent;
+            observer.disconnect();
+          }
+        });
+        observer.observe(document, {subtree: true, childList: true});`
+    })
     win.webContents.reload()
     let remounted = false
     for (let i = 0; i < 24; i++) {
@@ -3099,6 +3113,10 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       if (remounted) break
     }
     check('renderer remounted after reload', remounted)
+    const startupHeading = await js('window.startupHeading')
+    debuggerSession.detach()
+    check('returning launch never mounts a welcome heading',
+      startupHeading === null, String(startupHeading))
     await sleep(600)
     const panelsAfter = (await js(`(async () => ({
       sidebar: !!document.querySelector('.app > aside.sidebar:not(.outline-sidebar)'),
@@ -3126,14 +3144,34 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     )
     const blankH1 = (await js(`document.querySelector('.ProseMirror h1')?.textContent ?? null`)) as string | null
     check('welcome page only on first launch', blankH1 == null, String(blankH1))
-    win.webContents.send(IPC.menuAction, 'welcome')
+    const helpMenu = Menu.getApplicationMenu()?.items.find(item => item.label === t('menu.help'))
+    const openWelcome = helpMenu?.submenu?.items.find(item => item.label === t('menu.welcome'))
+    openWelcome?.click(undefined, win, win.webContents)
     await sleep(900)
     const welcomeH1 = (await js(`document.querySelector('.ProseMirror h1')?.textContent ?? null`)) as string | null
     check(
-      'menu item reopens welcome page',
+      'Help menu reopens welcome page',
       (welcomeH1 ?? '').includes('InkMark'),
       String(welcomeH1)
     )
+    check('welcome features are grouped under navigable headings', await js(`
+      (() => {
+        const sections = [...document.querySelectorAll('.ProseMirror h2')]
+        return sections.length > 1 && sections.every(heading => heading.nextElementSibling?.matches('ul'))
+      })()`) === true)
+    check('each welcome feature has its own icon', await js(`
+      (() => {
+        const items = [...document.querySelectorAll('.welcome-guide .ProseMirror li')]
+        const icons = items.map(item => getComputedStyle(item, '::before').maskImage)
+        return items.length > 0 && icons.every(mask => mask.startsWith('url(')) &&
+          new Set(icons).size === items.length
+      })()`) === true)
+    win.webContents.send(IPC.menuAction, 'new')
+    await sleep(300)
+    check('New starts a clean blank document from the welcome page', await js(`
+      document.querySelector('.ProseMirror')?.textContent === '' &&
+      !document.querySelector('.welcome-guide, .welcome-feature') &&
+      !document.title.startsWith('●')`) === true)
 
     // 18. Closing the whole window with unsaved changes must prompt:
     // Cancel keeps the window open, Discard closes it.

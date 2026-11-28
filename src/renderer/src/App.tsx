@@ -34,7 +34,8 @@ import {
   isMarkdownFileName,
   type OutlineItem
 } from './lib/markdown'
-import { useI18n, welcomeMarkdown } from './lib/i18n'
+import { useI18n } from './lib/i18n'
+import { welcomeMarkdown } from './lib/welcome'
 import { DELETE_MERMAID_EVENT, TOGGLE_PREVIEW_SOURCE_EVENT } from './lib/codeBlockCopy'
 import { normalizeDisplayMath } from './lib/math'
 import { normalizeTextareaLineEndings, preserveMarkdownSource } from './lib/markdownSource'
@@ -132,6 +133,8 @@ export default function App(): React.JSX.Element {
   } | null>(null)
   const [zoomLevel, setZoomLevel] = useState(0)
   const [recoveryReady, setRecoveryReady] = useState(false)
+  const [documentReady, setDocumentReady] = useState(false)
+  const [welcomeOpen, setWelcomeOpen] = useState(false)
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null)
   useEffect(() => setPreviewImage(null), [filePath, sourceMode])
   const [storageOpen, setStorageOpen] = useState(false)
@@ -156,7 +159,7 @@ export default function App(): React.JSX.Element {
   foldersRef.current = folders
   const openFilesRef = useRef(openFiles)
   openFilesRef.current = openFiles
-  const welcomedRef = useRef(false)
+  const openQueue = useRef<Promise<void> | null>(null)
   const recoveryStartedRef = useRef(false)
   const cleanContentRef = useRef('')
   const visualSourceRef = useRef({
@@ -165,11 +168,6 @@ export default function App(): React.JSX.Element {
     doc: null as ProseMirrorNode | null,
     content: ''
   })
-  // Content that must be displayed in the editor once it is ready. The editor
-  // mounts lazily (Suspense), so a document opened right at startup can race
-  // ahead of it; the pending content is applied on mount instead of being
-  // lost (or worse, the welcome document clobbering the opened file).
-  const pendingContentRef = useRef<string | null>(null)
   // Re-entrancy guard for the window-close confirmation flow.
   const closeRequestRef = useRef(false)
   const readOnlyRef = useRef(readOnly)
@@ -217,15 +215,12 @@ export default function App(): React.JSX.Element {
     refreshAnalysis(content, deferAnalysis)
   }, [refreshAnalysis])
 
-  const syncVisualEditor = useCallback((content: string) => {
+  const syncVisualEditor = useCallback((content: string, mountedContent?: string) => {
     compositionStart.current = null
     const editor = editorRef.current
-    if (!editor) {
-      pendingContentRef.current = content
-      return
-    }
+    if (!editor) return
     editor.action((ctx) => {
-      replaceAll(content)(ctx)
+      if (content !== mountedContent) replaceAll(content)(ctx)
       const doc = ctx.get(editorViewCtx).state.doc
       visualSourceRef.current = {
         source: content,
@@ -234,7 +229,6 @@ export default function App(): React.JSX.Element {
         content
       }
     })
-    pendingContentRef.current = null
   }, [])
 
   const cancelRecoveryTimer = useCallback(() => {
@@ -295,7 +289,6 @@ export default function App(): React.JSX.Element {
           await window.api.clearRecoveryDraft()
           return
         }
-        welcomedRef.current = true
         setFilePath(draft.filePath)
         filePathRef.current = draft.filePath
         fileVersionRef.current = draft.fileVersion
@@ -305,6 +298,7 @@ export default function App(): React.JSX.Element {
         sourceModeRef.current = draft.sourceMode
         setOpenFiles(draft.filePath ? [draft.filePath] : [])
         setDirty(true)
+        setDocumentReady(true)
       })
       .catch((error) => {
         console.error('Failed to load recovery draft', error)
@@ -312,25 +306,6 @@ export default function App(): React.JSX.Element {
       })
       .finally(() => setRecoveryReady(true))
   }, [localeReady, setDocumentContent, t])
-
-  // Seed the initial document once locale and crash recovery have completed. The welcome
-  // page shows only on the very first launch (persisted in localStorage);
-  // later launches start with a blank untitled document. File → Open Welcome
-  // Page reopens it at any time.
-  useEffect(() => {
-    if (localeReady && recoveryReady && !welcomedRef.current) {
-      welcomedRef.current = true
-      // If a document was already opened (e.g. "open with" at startup), never
-      // clobber it with the welcome document.
-      if (pendingContentRef.current === null) {
-        const seen = window.localStorage.getItem('inkmark.welcomeSeen') === '1'
-        const initial = seen ? '' : welcomeMarkdown(lang)
-        if (!seen) window.localStorage.setItem('inkmark.welcomeSeen', '1')
-        cleanContentRef.current = initial
-        setDocumentContent(initial)
-      }
-    }
-  }, [localeReady, recoveryReady, lang, setDocumentContent])
 
   useEffect(() => {
     document.documentElement.dataset.mermaidStyle = mermaidStyle
@@ -577,12 +552,13 @@ export default function App(): React.JSX.Element {
     return () => window.clearInterval(timer)
   }, [recoveryReady, persistRecoveryDraft])
 
-  const handleEditorReady = useCallback((editor: Editor) => {
+  const handleEditorReady = useCallback((editor: Editor, mountedContent: string) => {
     editorRef.current = editor
     const parser = editor.action((ctx) => ctx.get(remarkCtx))
     setSourceParser(() => parser)
-    syncVisualEditor(pendingContentRef.current ?? markdownRef.current)
-  }, [syncVisualEditor])
+    syncVisualEditor(markdownRef.current, mountedContent)
+    if (document.activeElement === document.body && !readOnlyRef.current && !welcomeOpen) focusEditor()
+  }, [focusEditor, syncVisualEditor, welcomeOpen])
 
   const handleChange = useCallback((doc: ProseMirrorNode) => {
     findDocumentListener.current?.()
@@ -660,6 +636,7 @@ export default function App(): React.JSX.Element {
 
           const savedPath = result.path
           const isNewPath = savedPath !== currentPath
+          setWelcomeOpen(false)
           setFilePath(savedPath)
           filePathRef.current = savedPath
           fileVersionRef.current = result.version ?? null
@@ -771,6 +748,7 @@ export default function App(): React.JSX.Element {
       if (documentLoadRef.current !== load || filePathRef.current !== previousPath) return
 
       rememberReadingPosition()
+      setWelcomeOpen(false)
       setMissingPath(null)
       setFilePath(path)
       filePathRef.current = path
@@ -885,11 +863,13 @@ export default function App(): React.JSX.Element {
         path = result.path
       }
       await scanFolder(path, true)
+      setShowSidebar(true)
+      setSidebarTab('files')
     } catch (error) {
       console.error('Failed to open folder', error)
       await reportSaveError(t('error.openFailed'), error)
     }
-  }, [reportSaveError, scanFolder, t])
+  }, [reportSaveError, scanFolder, setShowSidebar, t])
 
   const closeFolder = useCallback((path: string) => {
     folderScans.current.delete(path)
@@ -1023,29 +1003,23 @@ export default function App(): React.JSX.Element {
     [confirmBeforeReplace, displayDocument, rememberReadingPosition]
   )
 
-  const newDocument = useCallback(async () => {
-    if (!(await confirmBeforeReplace())) return
+  const startUntitled = useCallback((kind: 'blank' | 'welcome') => {
+    const welcome = kind === 'welcome'
+    const content = welcome ? welcomeMarkdown(lang) : ''
     rememberReadingPosition()
+    setWelcomeOpen(welcome)
     setFilePath(null)
     filePathRef.current = null
     fileVersionRef.current = null
     setDirty(false)
-    cleanContentRef.current = ''
-    displayDocument('', true)
-  }, [confirmBeforeReplace, displayDocument, rememberReadingPosition])
+    cleanContentRef.current = content
+    displayDocument(content, true)
+    if (welcome) localStorage.setItem('inkmark.welcomeSeen', '1')
+  }, [displayDocument, lang, rememberReadingPosition])
 
-  // File → Open Welcome Page: show the welcome document as an untitled page.
-  const showWelcome = useCallback(async () => {
-    if (!(await confirmBeforeReplace())) return
-    const welcome = welcomeMarkdown(lang)
-    rememberReadingPosition()
-    setFilePath(null)
-    filePathRef.current = null
-    fileVersionRef.current = null
-    setDirty(false)
-    cleanContentRef.current = welcome
-    displayDocument(welcome, true)
-  }, [confirmBeforeReplace, displayDocument, lang, rememberReadingPosition])
+  const newDocument = useCallback(async (kind: 'blank' | 'welcome') => {
+    if (await confirmBeforeReplace()) startUntitled(kind)
+  }, [confirmBeforeReplace, startUntitled])
 
   const documentBody = useCallback(() =>
     editorRef.current?.action(ctx => {
@@ -1172,10 +1146,10 @@ export default function App(): React.JSX.Element {
     (action: MenuAction) => {
       switch (action) {
         case 'new':
-          if (!readOnlyRef.current) void newDocument()
+          if (!readOnlyRef.current) void newDocument('blank')
           break
         case 'welcome':
-          if (!readOnlyRef.current) void showWelcome()
+          void newDocument('welcome')
           break
         case 'open':
           void openFile()
@@ -1317,7 +1291,6 @@ export default function App(): React.JSX.Element {
     },
     [
       newDocument,
-      showWelcome,
       openFile,
       openFolder,
       closeFolder,
@@ -1355,14 +1328,12 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (!recoveryReady) return
     const offMenu = window.api.onMenuAction(handleMenuAction)
+    const openTarget = (path: string, isDirectory: boolean, fromHistory = false) =>
+      isDirectory ? openFolder(path) : openPath(path, fromHistory)
     const offOpen = window.api.onOpenPath((path, isDirectory, fromHistory) => {
-      if (isDirectory) {
-        setShowSidebar(true)
-        setSidebarTab('files')
-        void openFolder(path)
-      } else {
-        void openPath(path, fromHistory)
-      }
+      openQueue.current = (openQueue.current ?? Promise.resolve())
+        .then(() => openTarget(path, isDirectory, fromHistory))
+        .catch(reportOpenError)
     })
     const offFileChanged = window.api.onFileChanged(() => {
       void handleExternalFileChange()
@@ -1371,7 +1342,18 @@ export default function App(): React.JSX.Element {
       void handleCloseRequest()
     })
     const offUpdate = window.api.onUpdateAvailable(setUpdate)
-    window.api.rendererReady()
+    if (!openQueue.current) {
+      // The first reply includes even an empty launch queue. Only then can we
+      // distinguish a plain launch from a file that is still being read.
+      openQueue.current = window.api.rendererReady().then(async targets => {
+        for (const { path, isDirectory, fromHistory } of targets) {
+          await openTarget(path, isDirectory, fromHistory)
+        }
+        if (!targets.length && !documentReady && localStorage.getItem('inkmark.welcomeSeen') !== '1') {
+          startUntitled('welcome')
+        }
+      }).catch(reportOpenError).finally(() => setDocumentReady(true))
+    }
     return () => {
       offMenu()
       offOpen()
@@ -1379,7 +1361,8 @@ export default function App(): React.JSX.Element {
       offClose()
       offUpdate()
     }
-  }, [recoveryReady, handleMenuAction, openFolder, openPath, setShowSidebar, handleCloseRequest, handleExternalFileChange])
+  }, [recoveryReady, documentReady, handleMenuAction, openFolder, openPath, startUntitled, reportOpenError,
+    handleCloseRequest, handleExternalFileChange])
 
   // Window-level drag & drop: open .md documents and append images dropped
   // outside of the editor.
@@ -1653,11 +1636,12 @@ export default function App(): React.JSX.Element {
             scheduleRecoveryDraft()
           }}
         >
-          {localeReady && recoveryReady && (
-            <div className={`wysiwyg-wrap${sourceMode ? ' hidden' : ''}`}>
+          {documentReady && (
+            <div className={`wysiwyg-wrap${sourceMode ? ' hidden' : ''}${welcomeOpen ? ' welcome-guide' : ''}`}>
               <Suspense fallback={<div className="editor-loading" />}>
                 <MarkdownEditor
-                  initialMarkdown={pendingContentRef.current ?? welcomeMarkdown(lang)}
+                  initialMarkdown={markdown}
+                  welcomeOpen={welcomeOpen}
                   renderHtml={renderHtml}
                   onReady={handleEditorReady}
                   onChange={handleChange}
@@ -1673,7 +1657,7 @@ export default function App(): React.JSX.Element {
               </Suspense>
             </div>
           )}
-          {sourceMode && (
+          {documentReady && sourceMode && (
             <textarea
               ref={textareaRef}
               className="source-editor"

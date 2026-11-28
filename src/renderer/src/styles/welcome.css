@@ -1,0 +1,54 @@
+/* The guide is editable. Scope the illustrations to its own section anchors
+   so they stay outside the Markdown, clipboard, and exported document. */
+.welcome-guide :is([id="writing-and-formatting"], [id="写作与排版"]) {
+  --demo-space: "";
+  --welcome-demo: url('../assets/welcome/format.svg?no-inline');
+}
+
+.welcome-guide :is([id="images,-code-and-diagrams"], [id="图片、代码与图表"]) {
+  --demo-space: "";
+  --welcome-demo: url('../assets/welcome/diagram.svg?no-inline');
+}
+
+.welcome-guide :is([id="find-and-replace"], [id="查找与替换"]) {
+  --demo-space: "";
+  --welcome-demo: url('../assets/welcome/find.svg?no-inline');
+}
+
+.welcome-guide .md-body > h2 {
+  display: flow-root;
+}
+
+.welcome-guide .md-body > h2::before {
+  content: var(--demo-space, none);
+  float: right;
+  width: min(36%, 10.5rem);
+  aspect-ratio: 168 / 46;
+  margin-inline-start: 0.6em;
+  background: center / contain no-repeat;
+  pointer-events: none;
+  /* Start the SVG when its heading first scrolls into view. */
+  animation: show-welcome-demo linear forwards;
+  animation-timeline: view();
+  animation-range: entry;
+}
+
+@keyframes show-welcome-demo {
+  from, to { background-image: var(--welcome-demo); }
+}
+
+.welcome-guide .md-body li.welcome-feature {
+  list-style: none;
+}
+
+.welcome-feature::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: -1.55em;
+  top: 0.3em;
+  width: 1em;
+  height: 1em;
+  background-color: var(--accent);
+  mask: var(--feature-icon) center / contain no-repeat;
+  pointer-events: none;
+}

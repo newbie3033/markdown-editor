@@ -9,7 +9,8 @@ import {
   remarkStringifyOptionsCtx
 } from '@milkdown/kit/core'
 import type { Node as ProseMirrorNode } from '@milkdown/prose/model'
-import { Plugin } from '@milkdown/prose/state'
+import { Plugin, type EditorState } from '@milkdown/prose/state'
+import { Decoration, DecorationSet } from '@milkdown/prose/view'
 import { TableView, tableEditing } from '@milkdown/prose/tables'
 import { $prose } from '@milkdown/kit/utils'
 import { commonmark, headingIdGenerator } from '@milkdown/kit/preset/commonmark'
@@ -39,6 +40,7 @@ import {
   remarkMathPlugin
 } from '../lib/math'
 import type { OutlineItem } from '../lib/markdown'
+import { getWelcomeIconMasks } from '../lib/welcome'
 import {
   authorizeDroppedFile,
   headingIdFromText,
@@ -84,10 +86,27 @@ const tableTextSelectionPlugin = $prose(() => {
   })
 })
 
+function welcomeFeatureIcons({ doc }: EditorState): DecorationSet {
+  const icons: Decoration[] = []
+  const masks = getWelcomeIconMasks()
+  doc.descendants((node, pos) => {
+    if (node.type.name !== 'list_item') return true
+    const label = node.firstChild?.firstChild
+    if (node.attrs.checked != null || !label?.text || !label.marks.some(mark => mark.type.name === 'strong')) return false
+    const mask = masks.get(label.text)
+    if (mask) icons.push(Decoration.node(pos, pos + node.nodeSize, {
+      class: 'welcome-feature', style: `--feature-icon: ${mask}`
+    }))
+    return false
+  })
+  return DecorationSet.create(doc, icons)
+}
+
 interface EditorProps {
   initialMarkdown: string
+  welcomeOpen: boolean
   renderHtml: boolean
-  onReady: (editor: Editor) => void
+  onReady: (editor: Editor, initialMarkdown: string) => void
   onChange: (doc: ProseMirrorNode) => void
   onOutline: (items: OutlineItem[]) => void
   /** Saves an untitled document before creating a relative image asset. */
@@ -103,6 +122,7 @@ interface EditorProps {
 
 function InnerEditor({
   initialMarkdown,
+  welcomeOpen,
   renderHtml,
   onReady,
   onChange,
@@ -305,10 +325,20 @@ function InnerEditor({
 
   const [loading, getInstance] = useInstance()
 
+  useLayoutEffect(() => {
+    if (loading || !welcomeOpen) return
+    const view = getInstance()?.action(ctx => ctx.get(editorViewCtx))
+    view?.setProps({ decorations: welcomeFeatureIcons })
+    return () => { if (view && !view.isDestroyed) view.setProps({ decorations: undefined }) }
+  }, [getInstance, loading, welcomeOpen])
+
   useEffect(() => {
     if (!loading) {
       const editor = getInstance()
-      if (editor) onReadyRef.current(editor)
+      if (editor) {
+        onReadyRef.current(editor, initialRef.current)
+        editor.action(ctx => onOutlineRef.current(outlineWithoutHtmlComments(ctx.get(editorViewCtx).state.doc)))
+      }
     }
   }, [loading, getInstance])
 
