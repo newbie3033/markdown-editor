@@ -334,7 +334,7 @@ A **Typora-style** WYSIWYG Markdown editor.
 - Drag a \`.md\` file anywhere into the window to open it
 - **Right-click** in the editor for quick formatting
 - \`Ctrl+F\` finds in the document, \`Ctrl+H\` finds and replaces, \`Ctrl+Shift+F\` searches the folder
-- **File → Export as PDF/HTML** to share your notes
+- Share your notes from the **File** menu as Word (.docx), PDF, or HTML
 
 > Tip: open a folder with \`Ctrl+Shift+O\` to browse your notes.
 
@@ -359,7 +359,7 @@ const WELCOME_ZH = `# 欢迎使用 InkMark
 - 将 \`.md\` 文件拖入窗口任意位置即可打开
 - 在编辑器中**右键**可快捷插入格式
 - \`Ctrl+F\` 文档内查找，\`Ctrl+H\` 查找并替换，\`Ctrl+Shift+F\` 文件夹关键词搜索
-- **文件 → 导出为 PDF/HTML** 分享你的笔记
+- 在**文件**菜单中将笔记导出为 Word（.docx）、PDF 或 HTML
 
 > 提示：按 \`Ctrl+Shift+O\` 打开文件夹浏览笔记。
 

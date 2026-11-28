@@ -6,8 +6,7 @@ directories:
   buildResources: build
   output: dist
 
-# The renderer is fully bundled by Vite and the main/preload processes only use
-# Electron + Node built-ins, so no node_modules are required at runtime.
+# electron-builder includes production dependencies used by the main process.
 files:
   - out/**/*
   - package.json

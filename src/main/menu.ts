@@ -103,6 +103,7 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
         { type: 'separator' },
         { label: t('menu.exportHtml'), click: (_i, w) => send('export-html', w ?? getWindowRef()) },
         { label: t('menu.exportPdf'), click: (_i, w) => send('export-pdf', w ?? getWindowRef()) },
+        { label: t('menu.exportWord'), click: (_i, w) => send('export-word', w ?? getWindowRef()) },
         { label: t('menu.print'), accelerator: `${modifier}+P`, click: (_i, w) => send('print', w ?? getWindowRef()) },
         { type: 'separator' },
         isMac

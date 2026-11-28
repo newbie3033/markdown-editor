@@ -1067,7 +1067,7 @@ async function showExportWarnings(win: BrowserWindow | null, warnings: string[])
 
 async function showRemoteImageNotice(
   win: BrowserWindow | null,
-  kind: 'html' | 'pdf',
+  kind: 'html' | 'embed',
   count: number
 ): Promise<void> {
   if (count === 0) return
@@ -1077,7 +1077,7 @@ async function showRemoteImageNotice(
     buttons: [t('dialog.ok')],
     defaultId: 0,
     message: t(isHtml ? 'dialog.remoteHtmlTitle' : 'dialog.remotePdfTitle'),
-    detail: t(isHtml ? 'dialog.remoteHtmlDetail' : 'dialog.remotePdfDetail').replace(
+    detail: t(isHtml ? 'dialog.remoteHtmlDetail' : 'dialog.remoteEmbedDetail').replace(
       '{count}',
       String(count)
     )
@@ -1690,6 +1690,34 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return { path: result.filePath, version, canceled: false }
   })
 
+  handle(IPC.exportWord, async (
+    _event,
+    defaultName: string,
+    body: string,
+    documentPath: string | null
+  ): Promise<SaveResult> => {
+    body = assertTextPayload(body, 'Word export')
+    if (documentPath) documentPath = assertPathAccess(documentPath)
+    const win = getWindow()
+    const options = {
+      title: t('dialog.exportWord'),
+      defaultPath: exportFileName(defaultName, 'document', '.docx'),
+      filters: [{ name: 'Word (.docx)', extensions: ['docx'] }]
+    }
+    const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return { canceled: true }
+
+    await showRemoteImageNotice(win, 'embed', remoteImageSources(body).length)
+    const local = await embedLocalImages(body, documentPath)
+    const remote = await embedRemoteImages(local.html)
+    const warnings = new Set([...local.warnings, ...remote.warnings])
+    const { buildWordDocument } = await import('./word')
+    const data = await buildWordDocument(remote.html, defaultName, warnings)
+    const version = await atomicWriteFile(result.filePath, data)
+    await showExportWarnings(win, [...warnings])
+    return { path: result.filePath, version, canceled: false }
+  })
+
   handle(IPC.exportPdf, async (
     _event,
     defaultName: string,
@@ -1710,7 +1738,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     if (result.canceled || !result.filePath) return { canceled: true }
 
     const remoteSources = remoteImageSources(html)
-    await showRemoteImageNotice(win, 'pdf', remoteSources.length)
+    await showRemoteImageNotice(win, 'embed', remoteSources.length)
     const routed = await routeLocalImages(html, documentPath)
     const remote = await embedRemoteImages(routed.html)
     html = remote.html
@@ -1747,7 +1775,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     if (documentPath) documentPath = assertPathAccess(documentPath)
     const win = getWindow()
     const remoteSources = remoteImageSources(html)
-    await showRemoteImageNotice(win, 'pdf', remoteSources.length)
+    await showRemoteImageNotice(win, 'embed', remoteSources.length)
     const routed = await routeLocalImages(html, documentPath)
     const remote = await embedRemoteImages(routed.html)
     html = remote.html

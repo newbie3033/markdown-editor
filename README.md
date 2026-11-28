@@ -73,14 +73,15 @@ engine), packaged for Windows, macOS, and Linux with **electron-builder**.
   exhaust the Electron main process.
 - **Private-by-default documents** — remote HTTP(S) images are not loaded from
   opened Markdown. HTML export keeps remote URLs and warns that the result needs
-  a network connection; PDF/Print explicitly fetches and embeds them with
+  a network connection; Word, PDF, and Print explicitly fetch and embed them with
   bounded size, redirect, and timeout limits, reporting failures.
 - **Predictable and safe image paths** — local images are imported to the
   adjacent `assets/` folder and rendered through a capability-checked custom
   protocol instead of direct `file://` access. Clipboard images use the same
   managed attachment flow.
-- **Export** — HTML, PDF, and Print, with local images embedded so exported
-  documents do not depend on paths from the source machine.
+- **Export** — choose *File → Export as Word (.docx)* for an editable document
+  with headings, lists, tables, links, and embedded images. Formulas retain
+  their LaTeX source. HTML, PDF, and Print are also available.
 - **中文 / English UI** — switch via *View → Language* or the status bar button;
   the choice persists and the app follows the system language on first launch.
 - **Light & dark themes** — Typora/GitHub-inspired styling.
