@@ -1,20 +1,26 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { Editor } from '@milkdown/kit/core'
+import type { Node as ProseMirrorNode } from '@milkdown/prose/model'
 import type { SearchFlags } from '../../../shared/ipc'
 import { useI18n } from '../lib/i18n'
 import {
   findInStringAsync,
   findTextMatchesAsync,
+  getEditorDocument,
   replaceAllInString,
   replaceAllMatchesInEditor,
   replaceMatchInEditor,
   replaceRangeInString,
-  selectMatch
+  selectMatch,
+  type TextMatch
 } from '../lib/search'
 import { SearchFlagsToggle } from './SearchFlagsToggle'
 
+const emptyMatches: TextMatch[] = []
+
 interface FindBarProps {
-  getEditor: () => Editor | null
+  editor: Editor | null
+  subscribeToDocument: (listener: () => void) => () => void
   sourceMode: boolean
   sourceText: string
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
@@ -29,7 +35,8 @@ interface FindBarProps {
 }
 
 export function FindBar({
-  getEditor,
+  editor,
+  subscribeToDocument,
   sourceMode,
   sourceText,
   textareaRef,
@@ -64,37 +71,44 @@ export function FindBar({
     if (replaceOpen) replaceInputRef.current?.focus()
   }, [replaceOpen])
 
-  const [matches, setMatches] = useState<Array<{ from: number; to: number }>>([])
+  const getContent = useCallback(() => sourceMode ? sourceText : getEditorDocument(editor),
+    [editor, sourceMode, sourceText])
+  const content = useSyncExternalStore(subscribeToDocument, getContent)
+  const [result, setResult] = useState<{
+    content: ProseMirrorNode | string
+    query: string
+    flags: SearchFlags
+    matches: TextMatch[]
+  } | null>(null)
+  const matches = result?.content === content && result.query === query && result.flags === flags
+    ? result.matches : emptyMatches
+
+  // A transaction can precede the React render or the regex worker's reply.
+  const matchesAreCurrent = (): boolean => matches.length > 0 &&
+    content === (sourceMode ? textareaRef.current?.value : getEditorDocument(editor))
 
   useEffect(() => {
     let canceled = false
     const updateMatches = async (): Promise<void> => {
-      if (!query.trim()) {
-        setMatches([])
-        return
-      }
-      setMatches([])
+      if (!query.trim() || content === null) return
       try {
-        const editor = getEditor()
-        const next = sourceMode
-          ? await findInStringAsync(sourceText, query, flags)
-          : editor
-            ? await findTextMatchesAsync(editor, query, flags)
-            : []
-        if (!canceled) setMatches(next)
+        const next = typeof content === 'string'
+          ? await findInStringAsync(content, query, flags)
+          : await findTextMatchesAsync(content, query, flags)
+        if (!canceled) setResult({ content, query, flags, matches: next })
       } catch (error) {
         console.error('Search failed', error)
-        if (!canceled) setMatches([])
+        if (!canceled) setResult(null)
       }
     }
     void updateMatches()
     return () => {
       canceled = true
     }
-  }, [query, flags, sourceMode, sourceText, getEditor])
+  }, [query, flags, content])
 
   const selectAt = (index: number, focus: boolean): void => {
-    if (matches.length === 0) return
+    if (!matchesAreCurrent()) return
     const wrapped = ((index % matches.length) + matches.length) % matches.length
     setCurrent(wrapped)
     const match = matches[wrapped]
@@ -108,7 +122,6 @@ export function FindBar({
         textarea.scrollTop = Math.max(0, line * 23 - textarea.clientHeight / 3)
       }
     } else {
-      const editor = getEditor()
       if (editor) selectMatch(editor, match, focus)
     }
   }
@@ -131,12 +144,12 @@ export function FindBar({
   // Auto-select the first match while typing (without stealing focus).
   useEffect(() => {
     setCurrent(0)
-    if (matches.length > 0) selectAt(0, false)
+    if (document.activeElement?.closest('.findbar')) selectAt(0, false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matches, query, flags, sourceMode, sourceText])
 
   const replaceCurrent = (): void => {
-    if (!query.trim() || matches.length === 0) return
+    if (!matchesAreCurrent()) return
     const match = matches[((current % matches.length) + matches.length) % matches.length]
     if (sourceMode) {
       const next = replaceRangeInString(sourceText, match, replacement)
@@ -147,17 +160,15 @@ export function FindBar({
         textarea.setSelectionRange(match.from + replacement.length, match.from + replacement.length)
       }
     } else {
-      const editor = getEditor()
       if (editor) replaceMatchInEditor(editor, match, replacement)
     }
   }
 
   const replaceAll = (): void => {
-    if (!query.trim() || matches.length === 0) return
+    if (!matchesAreCurrent()) return
     if (sourceMode) {
       onSourceReplace(replaceAllInString(sourceText, matches, replacement))
     } else {
-      const editor = getEditor()
       if (editor) replaceAllMatchesInEditor(editor, matches, replacement)
     }
   }

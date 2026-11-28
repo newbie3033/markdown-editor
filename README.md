@@ -193,6 +193,43 @@ INKMARK_SELFTEST=1 npx electron . --no-sandbox --user-data-dir=./.tmp-selftest
 > `ELECTRON_GET_USE_PROXY=true` plus `HTTPS_PROXY` / `HTTP_PROXY` before
 > installing.
 
+## Editor performance regression test
+
+Run `npm run test:perf` from a desktop development machine. It builds the app,
+opens it in headless Electron with a temporary profile and generated Markdown
+fixtures, and prints a timing table. Run it on an otherwise idle machine and
+compare results on the same hardware. If your test environment specifically
+requires disabling Electron's sandbox, pass `npm run test:perf -- --no-sandbox`.
+
+The test drives Chromium IME events through the built app. The fixtures cover
+small and large plain documents, preserving original Markdown formatting,
+HTML preview on and off, and source mode. Each fixture runs 24 composition
+updates and six commits, then checks the committed text and recovery draft
+against the expected Markdown. The large source-mode case also checks that
+counts and headings hold steady during composition, Save writes the latest
+text immediately, and the refreshed outline jumps to the new heading offsets.
+The table reports P95 input-to-renderer
+acknowledgement for updates and commits, plus the longest renderer task
+between the final commit and draft completion.
+A value of zero for the latter means no task of 50 ms or more was observed in
+that window.
+
+The command exits nonzero on a content mismatch, timeout, or exceeded timing
+limit. The timing limits are regression ceilings in milliseconds and include
+headroom for machine variance.
+
+| Scenario | IME update and commit P95 | Longest task after commit |
+| --- | ---: | ---: |
+| Small Markdown | 40 | 100 |
+| Large plain Markdown or HTML preview off | 45 | 350 |
+| Large Markdown with original formatting | 45 | 1600 |
+| Large Markdown with HTML preview on | 180 | 350 |
+| Large Markdown in source mode | 80 | 350 |
+
+The higher ceilings track paths with known costs. This suite uses synthetic
+composition events and measures renderer acknowledgement. Use your system IME
+on the affected document to verify candidate display and perceived latency.
+
 ## Packaging
 
 ```bash
