@@ -321,60 +321,6 @@ const dict = {
 
 export type MessageKey = keyof (typeof dict)['en']
 
-const WELCOME_EN = `# Welcome to InkMark
-
-A **Typora-style** WYSIWYG Markdown editor.
-
-## Features
-
-- Write Markdown and see it rendered *inline*, just like Typora
-- \`Ctrl+/\` toggles source code mode
-- \`Ctrl+Shift+1\` / \`Ctrl+Shift+2\` / \`Ctrl+Shift+3\` toggle the outline, articles and file tree panels (\`Ctrl+Shift+L\` toggles the sidebar)
-- Paste or drag an **image** to insert it next to your document
-- Drag a \`.md\` file anywhere into the window to open it
-- **Right-click** in the editor for quick formatting
-- \`Ctrl+F\` finds in the document, \`Ctrl+H\` finds and replaces, \`Ctrl+Shift+F\` searches the folder
-- Share your notes from the **File** menu as Word (.docx), PDF, or HTML
-
-> Tip: open a folder with \`Ctrl+Shift+O\` to browse your notes.
-
-\`\`\`js
-console.log("Hello, InkMark!")
-\`\`\`
-
-- [x] Task lists work
-- [ ] And so do links: [Milkdown](https://milkdown.dev)
-`
-
-const WELCOME_ZH = `# 欢迎使用 InkMark
-
-一款 **Typora 风格**的所见即所得 Markdown 编辑器。
-
-## 功能特性
-
-- 边写边渲染，和 Typora 一样所见即所得
-- \`Ctrl+/\` 切换源码模式
-- \`Ctrl+Shift+1\` / \`Ctrl+Shift+2\` / \`Ctrl+Shift+3\` 切换大纲、文章与文件树（\`Ctrl+Shift+L\` 切换侧边栏）
-- 粘贴或拖入**图片**即可插入到文档旁边
-- 将 \`.md\` 文件拖入窗口任意位置即可打开
-- 在编辑器中**右键**可快捷插入格式
-- \`Ctrl+F\` 文档内查找，\`Ctrl+H\` 查找并替换，\`Ctrl+Shift+F\` 文件夹关键词搜索
-- 在**文件**菜单中将笔记导出为 Word（.docx）、PDF 或 HTML
-
-> 提示：按 \`Ctrl+Shift+O\` 打开文件夹浏览笔记。
-
-\`\`\`js
-console.log("你好，InkMark！")
-\`\`\`
-
-- [x] 任务列表可用
-- [ ] 链接也一样：[Milkdown](https://milkdown.dev)
-`
-
-export function welcomeMarkdown(lang: Lang): string {
-  return formatShortcut(lang === 'zh' ? WELCOME_ZH : WELCOME_EN)
-}
-
 // Static translation for non-React contexts (e.g. ProseMirror node views).
 let activeLang: Lang = 'en'
 

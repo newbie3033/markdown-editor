@@ -27,6 +27,12 @@ export interface AppMenuItem {
 
 export type Lang = 'en' | 'zh'
 
+export interface OpenTarget {
+  path: string
+  isDirectory: boolean
+  fromHistory?: boolean
+}
+
 export interface FileResult {
   path?: string
   content?: string
@@ -316,8 +322,7 @@ export const IPC = {
   openUpdateDownload: 'update:open-download',
   menuAction: 'menu:action',
   openPath: 'file:open-path',
-  // Renderer announces that its IPC listeners are registered; the main
-  // process then flushes queued "open with" paths (no lost messages).
+  // Register the renderer for live opens and return all paths queued before it was ready.
   rendererReady: 'app:renderer-ready',
   // Main asks the renderer to confirm closing the window (unsaved changes);
   // the renderer replies with closeConfirmed once it is safe to close.
@@ -409,5 +414,5 @@ export interface InkMarkApi {
   onFileChanged(callback: (path: string) => void): () => void
   onCloseRequest(callback: () => void): () => void
   closeConfirmed(): void
-  rendererReady(): void
+  rendererReady(): Promise<OpenTarget[]>
 }

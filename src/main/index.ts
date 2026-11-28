@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, protocol, screen, shell } from 'electron'
 import { isAbsolute, join, resolve } from 'node:path'
 import { statSync } from 'node:fs'
-import { IPC } from '../shared/ipc'
+import { IPC, type OpenTarget } from '../shared/ipc'
 import { grantDirectoryAccess, grantDocumentAccess, registerLocalProtocols, registerIpc } from './ipc'
 import { buildMenu, rebuildMenu } from './menu'
 import { initLocale } from './i18n'
@@ -34,12 +34,6 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 let mainWindow: BrowserWindow | null = null
-
-interface OpenTarget {
-  path: string
-  isDirectory: boolean
-  fromHistory?: boolean
-}
 
 // Hold launch targets until the renderer has registered its IPC listeners.
 const pendingOpenPaths: OpenTarget[] = []
@@ -147,6 +141,10 @@ function createWindow(): void {
 
   mainWindow.webContents.on('render-process-gone', () => {
     rendererGone = true
+    rendererReady = false
+  })
+  mainWindow.webContents.on('did-start-navigation', (event) => {
+    if (event.isMainFrame && !event.isSameDocument) rendererReady = false
   })
 
   mainWindow.on('closed', () => {
@@ -253,27 +251,23 @@ if (!gotSingleInstanceLock) {
       sendOpenPath({ path, isDirectory: false, fromHistory: true })
     })
 
-    // The renderer reports when its IPC listeners are registered; flush any
-    // "open with" paths that were queued while the window was starting.
-    ipcMain.on(IPC.rendererReady, (event) => {
+    ipcMain.handle(IPC.rendererReady, (event): OpenTarget[] => {
       const current = mainWindow
       if (
         !current ||
         event.sender !== current.webContents ||
         event.senderFrame !== current.webContents.mainFrame
-      ) return
+      ) throw new Error('Unexpected renderer')
       const wasReady = rendererReady
       rendererReady = true
       rendererGone = false
-      for (const { path, isDirectory, fromHistory } of pendingOpenPaths.splice(0)) {
-        current.webContents.send(IPC.openPath, path, isDirectory, fromHistory)
-      }
       if (pendingUpdateCheck) {
         pendingUpdateCheck = false
         void checkForUpdates(current, false)
       } else if (!wasReady && app.isPackaged) {
         void checkForUpdates(current, true)
       }
+      return pendingOpenPaths.splice(0)
     })
 
     // The renderer finished its unsaved-changes handling (saved or discarded);

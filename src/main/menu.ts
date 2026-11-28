@@ -75,7 +75,6 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
       label: t('menu.file'),
       submenu: [
         { label: t('menu.new'), accelerator: `${modifier}+N`, click: (_i, w) => send('new', w ?? getWindowRef()) },
-        { label: t('menu.welcome'), click: (_i, w) => send('welcome', w ?? getWindowRef()) },
         { type: 'separator' },
         { label: t('menu.open'), accelerator: `${modifier}+O`, click: (_i, w) => send('open', w ?? getWindowRef()) },
         {
@@ -272,6 +271,8 @@ function buildTemplate(lang: Lang): MenuItemConstructorOptions[] {
     {
       label: t('menu.help'),
       submenu: [
+        { label: t('menu.welcome'), click: (_i, w) => send('welcome', w ?? getWindowRef()) },
+        { type: 'separator' },
         {
           label: t('menu.checkForUpdates'),
           click: () => requestUpdateCheck()
