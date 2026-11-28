@@ -1,4 +1,5 @@
 import { renderDocumentHtml } from './documentHtml'
+import { diagramCanvas } from './diagramPng'
 import { wrapDocumentTables } from './documentTable'
 import themeCss from '../styles/theme.css?raw'
 import { renderDiagram, isMathLanguage, isMermaidLanguage } from './codeBlockCopy'
@@ -13,7 +14,7 @@ function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;')
 }
 
-async function addRenderedPreviews(bodyHtml: string, renderHtml: boolean): Promise<string> {
+async function prepareBody(bodyHtml: string, renderHtml: boolean, format: 'html' | 'word'): Promise<HTMLTemplateElement> {
   const style = getMermaidStyle()
   const template = document.createElement('template')
   template.innerHTML = bodyHtml
@@ -72,19 +73,21 @@ async function addRenderedPreviews(bodyHtml: string, renderHtml: boolean): Promi
   }
 
   if (renderHtml) renderDocumentHtml(template.content)
-  wrapDocumentTables(template.content)
+  if (format === 'html') wrapDocumentTables(template.content)
 
   for (const inlineMath of Array.from(
     template.content.querySelectorAll<HTMLElement>('span[data-type="math_inline"]')
   )) {
     const value = inlineMath.dataset.value ?? inlineMath.textContent ?? ''
-    inlineMath.innerHTML = renderMath(value, false)
+    if (format === 'word') inlineMath.textContent = `$${value}$`
+    else inlineMath.innerHTML = renderMath(value, false)
   }
 
   for (const pre of Array.from(template.content.querySelectorAll('pre[data-language]'))) {
     const language = pre.getAttribute('data-language') ?? ''
     const content = pre.querySelector('code')?.textContent ?? ''
     if (isMathLanguage(language)) {
+      if (format === 'word') continue // Keep the editable LaTeX in the code block.
       const formula = document.createElement('div')
       formula.className = 'formula-export'
       formula.innerHTML = renderMath(content, true)
@@ -94,22 +97,51 @@ async function addRenderedPreviews(bodyHtml: string, renderHtml: boolean): Promi
     if (isMermaidLanguage(language)) {
       try {
         const { svg } = await renderDiagram(language, content, 'light', style)
-        const diagram = document.createElement('div')
+        const diagram = document.createElement(format === 'word' ? 'p' : 'div')
         diagram.className = 'diagram-export'
         diagram.style.backgroundColor = mermaidBackground(style, 'light')
         diagram.innerHTML = svg
+        if (format === 'word') {
+          const vector = diagram.querySelector('svg')
+          if (!vector) continue
+          const canvas = await diagramCanvas(vector, diagram.style.backgroundColor)
+          const image = document.createElement('img')
+          image.src = canvas.toDataURL('image/png')
+          image.alt = language
+          diagram.replaceChildren(image)
+        }
         pre.replaceWith(diagram)
       } catch {
         // Keep invalid diagram source readable in the exported document.
       }
     }
   }
+  return template
+}
+
+export async function buildWordBody(bodyHtml: string, renderHtml: boolean): Promise<string> {
+  const template = await prepareBody(bodyHtml, renderHtml, 'word')
+  for (const item of template.content.querySelectorAll<HTMLElement>('li[data-item-type="task"]')) {
+    const paragraph = item.querySelector(':scope > p') ?? item
+    paragraph.prepend(item.dataset.checked === 'true' ? '☑ ' : '☐ ')
+  }
+  // WordprocessingML needs explicit line breaks to preserve multiline code.
+  for (const pre of template.content.querySelectorAll('pre')) {
+    const paragraph = document.createElement('p')
+    for (const line of (pre.textContent ?? '').split('\n')) {
+      if (paragraph.hasChildNodes()) paragraph.append(document.createElement('br'))
+      const code = document.createElement('code')
+      code.textContent = line
+      paragraph.append(code)
+    }
+    pre.replaceWith(paragraph)
+  }
   return template.innerHTML
 }
 
 export async function buildHtmlDocument(bodyHtml: string, title: string, renderHtml: boolean): Promise<string> {
   const safeTitle = escapeHtml(title)
-  const renderedBody = await addRenderedPreviews(bodyHtml, renderHtml)
+  const template = await prepareBody(bodyHtml, renderHtml, 'html')
   return `<!doctype html>
 <html lang="en" data-theme="light">
 <head>
@@ -123,7 +155,7 @@ ${selfContainedKatexCss}
 </style>
 </head>
 <body class="export-page">
-<main class="md-body">${renderedBody}</main>
+<main class="md-body">${template.innerHTML}</main>
 </body>
 </html>`
 }

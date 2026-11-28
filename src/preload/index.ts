@@ -94,6 +94,9 @@ const api: InkMarkApi = {
   exportPdf: (defaultName: string, html: string, documentPath: string | null): Promise<SaveResult> =>
     ipcRenderer.invoke(IPC.exportPdf, defaultName, html, documentPath),
 
+  exportWord: (defaultName, bodyHtml, documentPath) =>
+    ipcRenderer.invoke(IPC.exportWord, defaultName, bodyHtml, documentPath),
+
   exportPrint: (html: string, documentPath: string | null): Promise<void> =>
     ipcRenderer.invoke(IPC.exportPrint, html, documentPath),
 

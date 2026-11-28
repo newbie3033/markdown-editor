@@ -1798,7 +1798,7 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     win.webContents.send(IPC.menuAction, 'toggle-source')
     await sleep(300)
 
-    // 13. Export HTML/PDF end to end (save dialogs stubbed).
+    // 13. Export documents end to end (save dialogs stubbed).
     await fs.mkdir(join(TEST_DIR, 'docs', 'assets'), { recursive: true })
     await fs.writeFile(join(TEST_DIR, 'docs', 'assets', 'export.png'), png)
     await fs.writeFile(
@@ -2222,6 +2222,15 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
         `len=${pdfBuf?.length ?? 0} header=${pdfBuf?.subarray(0, 8).toString() ?? ''}`
       )
 
+      win.webContents.send(IPC.menuAction, 'export-word')
+      const wordPath = join(EXPORT_DIR, 'export-test.docx')
+      for (let i = 0; i < 100 && !existsSync(wordPath); i++) await sleep(50)
+      const word = await fs.readFile(wordPath).catch(() => null)
+      check('Word export writes a DOCX package with local media', Boolean(
+        word?.subarray(0, 4).equals(Buffer.from('504b0304', 'hex')) && word.includes('word/document.xml') &&
+        word.includes('[Content_Types].xml') && word.includes('word/media/')
+      ))
+
       // A realistic large image must not be expanded into a data: navigation
       // URL for PDF. The hidden export page loads it through inkmark-asset.
       const largeSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><metadata>${'x'.repeat(4 * 1024 * 1024)}</metadata><rect width="120" height="80" fill="#4a90e2"/></svg>`
@@ -2351,6 +2360,16 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
           remotePdf != null && remotePdf.length > 1000 && remotePdf.subarray(0, 4).toString() === '%PDF' && remoteRequestCount === 2,
           JSON.stringify({ requests: remoteRequestCount, len: remotePdf?.length ?? 0 })
         )
+
+        const imageBody = `<p><img src="${remoteUrl}" alt="remote"></p>`
+        await js(`window.api.exportWord('remote-test', ${JSON.stringify(imageBody)}, ${JSON.stringify(remoteDocPath)})`)
+        const remoteWord = await fs.readFile(join(EXPORT_DIR, 'remote-test.docx'))
+        check('Word export embeds a remote image', remoteWord.includes('word/media/') && remoteRequestCount === 3)
+
+        dialog.showSaveDialog = async () => ({ canceled: true, filePath: '' })
+        const canceled = await js(`window.api.exportWord('canceled', ${JSON.stringify(imageBody)}, null)`) as { canceled: boolean }
+        check('canceling Word export skips downloads and file creation',
+          canceled.canceled && remoteRequestCount === 3 && !existsSync(join(EXPORT_DIR, 'canceled.docx')))
       } finally {
         dialog.showSaveDialog = remoteOriginalShowSave
       }

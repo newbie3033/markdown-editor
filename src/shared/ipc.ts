@@ -231,6 +231,7 @@ export type MenuAction =
   | 'save-as'
   | 'export-html'
   | 'export-pdf'
+  | 'export-word'
   | 'print'
   | 'find'
   | 'replace'
@@ -275,6 +276,7 @@ export const IPC = {
   exportDiagramPng: 'export:diagram-png',
   exportHtml: 'export:html',
   exportPdf: 'export:pdf',
+  exportWord: 'export:word',
   exportPrint: 'export:print',
   saveImage: 'image:save',
   loadRemoteImage: 'image:load-remote',
@@ -364,6 +366,7 @@ export interface InkMarkApi {
   exportDiagramPng(data: ArrayBuffer): Promise<SaveResult>
   exportHtml(defaultName: string, html: string, documentPath: string | null): Promise<SaveResult>
   exportPdf(defaultName: string, html: string, documentPath: string | null): Promise<SaveResult>
+  exportWord(defaultName: string, bodyHtml: string, documentPath: string | null): Promise<SaveResult>
   exportPrint(html: string, documentPath: string | null): Promise<void>
   saveImage(payload: SaveImagePayload): Promise<SaveImageResult | null>
   loadRemoteImage(url: string): Promise<RemoteImageResult>

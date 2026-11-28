@@ -19,7 +19,7 @@ import { FindBar } from './components/FindBar'
 import { StorageManager } from './components/StorageManager'
 import { UpdateDialog } from './components/UpdateDialog'
 import { closeHtmlPreviewSource } from './lib/htmlPreview'
-import { buildHtmlDocument } from './lib/export'
+import { buildHtmlDocument, buildWordBody } from './lib/export'
 import { appendImage } from './lib/commands'
 import { findInStringAsync, findTextMatchesAsync, getEditorDocument, selectMatch } from './lib/search'
 import { useResizableWidth } from './lib/useResizableWidth'
@@ -1047,16 +1047,26 @@ export default function App(): React.JSX.Element {
     displayDocument(welcome, true)
   }, [confirmBeforeReplace, displayDocument, lang, rememberReadingPosition])
 
-  const buildDocumentHtml = useCallback(() => {
-    const body = editorRef.current?.action(ctx => {
+  const documentBody = useCallback(() =>
+    editorRef.current?.action(ctx => {
       if (!sourceModeRef.current) return getHTML()(ctx)
       const doc = ctx.get(parserCtx)(normalizeDisplayMath(markdownRef.current))
       const container = document.createElement('div')
       container.append(DOMSerializer.fromSchema(doc.type.schema).serializeFragment(doc.content))
       return container.innerHTML
-    }) ?? ''
-    return buildHtmlDocument(body, title, renderHtml)
-  }, [renderHtml, title])
+    }) ?? '', [])
+
+  const buildDocumentHtml = useCallback(() =>
+    buildHtmlDocument(documentBody(), title, renderHtml), [documentBody, renderHtml, title])
+
+  const exportWord = useCallback(async () => {
+    try {
+      const path = filePathRef.current
+      await window.api.exportWord(title, await buildWordBody(documentBody(), renderHtml), path)
+    } catch (error) {
+      await reportSaveError(t('error.exportFailed'), error)
+    }
+  }, [documentBody, renderHtml, reportSaveError, t, title])
 
   const exportHtml = useCallback(async () => {
     try {
@@ -1188,6 +1198,9 @@ export default function App(): React.JSX.Element {
         case 'export-pdf':
           void exportPdf()
           break
+        case 'export-word':
+          void exportWord()
+          break
         case 'print':
           void print()
           break
@@ -1312,6 +1325,7 @@ export default function App(): React.JSX.Element {
       save,
       exportHtml,
       exportPdf,
+      exportWord,
       print,
       toggleSourceMode,
       applyZoom,

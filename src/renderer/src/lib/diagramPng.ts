@@ -1,6 +1,6 @@
 // Size the bitmap from the diagram's own coordinate system, independent of the
 // editor viewport. Bound the canvas allocation for unusually large diagrams.
-export async function diagramPng(svg: SVGSVGElement, background: string): Promise<ArrayBuffer> {
+export async function diagramCanvas(svg: SVGSVGElement, background: string): Promise<HTMLCanvasElement> {
   const { width, height } = svg.viewBox.baseVal
   if (!(width > 0 && height > 0)) throw new Error('Invalid SVG dimensions')
   const padding = 16
@@ -24,6 +24,11 @@ export async function diagramPng(svg: SVGSVGElement, background: string): Promis
   context.fillStyle = background
   context.fillRect(0, 0, canvas.width, canvas.height)
   context.drawImage(image, padding * scale, padding * scale, width * scale, height * scale)
+  return canvas
+}
+
+export async function diagramPng(svg: SVGSVGElement, background: string): Promise<ArrayBuffer> {
+  const canvas = await diagramCanvas(svg, background)
   const png = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('PNG encoding failed')), 'image/png')
   })
