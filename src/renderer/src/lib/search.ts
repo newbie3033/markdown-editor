@@ -1,5 +1,6 @@
 import type { Editor } from '@milkdown/kit/core'
 import { editorStateCtx, editorViewCtx } from '@milkdown/kit/core'
+import type { Node as ProseMirrorNode } from '@milkdown/prose/model'
 import { TextSelection } from '@milkdown/prose/state'
 import {
   compileSearchRegex,
@@ -14,13 +15,14 @@ export interface TextMatch {
 
 const MAX_IN_DOCUMENT_MATCHES = 10_000
 
-function editorTextSegments(editor: Editor): RegexTextSegment[] {
+export function getEditorDocument(editor: Editor | null): ProseMirrorNode | null {
+  return editor?.action(ctx => ctx.get(editorViewCtx).state.doc) ?? null
+}
+
+function editorTextSegments(doc: ProseMirrorNode): RegexTextSegment[] {
   const segments: RegexTextSegment[] = []
-  editor.action((ctx) => {
-    const state = ctx.get(editorStateCtx)
-    state.doc.descendants((node, pos) => {
-      if (node.isText && node.text) segments.push({ text: node.text, offset: pos })
-    })
+  doc.descendants((node, pos) => {
+    if (node.isText && node.text) segments.push({ text: node.text, offset: pos })
   })
   return segments
 }
@@ -29,36 +31,30 @@ function editorTextSegments(editor: Editor): RegexTextSegment[] {
  * Find all occurrences of `query` in the editor document, VS Code style
  * (case-sensitive / whole-word / regex options via `flags`).
  */
-export function findTextMatches(editor: Editor, query: string, flags: SearchFlags = {}): TextMatch[] {
+function findTextMatches(doc: ProseMirrorNode, query: string, flags: SearchFlags): TextMatch[] {
   if (flags.regex) return []
   const regex = compileSearchRegex(query, flags)
   if (!regex) return []
   const matches: TextMatch[] = []
-  editor.action((ctx) => {
-    const state = ctx.get(editorStateCtx)
-    state.doc.descendants((node, pos) => {
-      if (!node.isText) return
-      const text = node.text ?? ''
-      if (!text) return
-      const re = compileSearchRegex(query, flags)
-      if (!re) return
-      let execResult: RegExpExecArray | null
-      while (matches.length < MAX_IN_DOCUMENT_MATCHES && (execResult = re.exec(text)) !== null) {
-        matches.push({ from: pos + execResult.index, to: pos + execResult.index + execResult[0].length })
-        if (execResult[0].length === 0) re.lastIndex += 1
-      }
-    })
+  doc.descendants((node, pos) => {
+    if (!node.text) return
+    regex.lastIndex = 0
+    let execResult: RegExpExecArray | null
+    while (matches.length < MAX_IN_DOCUMENT_MATCHES && (execResult = regex.exec(node.text)) !== null) {
+      matches.push({ from: pos + execResult.index, to: pos + execResult.index + execResult[0].length })
+      if (execResult[0].length === 0) regex.lastIndex += 1
+    }
   })
   return matches
 }
 
 export async function findTextMatchesAsync(
-  editor: Editor,
+  doc: ProseMirrorNode,
   query: string,
   flags: SearchFlags = {}
 ): Promise<TextMatch[]> {
-  if (!flags.regex) return findTextMatches(editor, query, flags)
-  return window.api.findRegexMatches(editorTextSegments(editor), query, flags)
+  if (!flags.regex) return findTextMatches(doc, query, flags)
+  return window.api.findRegexMatches(editorTextSegments(doc), query, flags)
 }
 
 /** Select (and scroll to) a match inside the editor. */

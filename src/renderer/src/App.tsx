@@ -21,7 +21,7 @@ import { UpdateDialog } from './components/UpdateDialog'
 import { closeHtmlPreviewSource } from './lib/htmlPreview'
 import { buildHtmlDocument } from './lib/export'
 import { appendImage } from './lib/commands'
-import { findInStringAsync, findTextMatchesAsync, selectMatch } from './lib/search'
+import { findInStringAsync, findTextMatchesAsync, getEditorDocument, selectMatch } from './lib/search'
 import { useResizableWidth } from './lib/useResizableWidth'
 import { usePersistentBoolean } from './lib/usePersistentBoolean'
 import {
@@ -43,6 +43,9 @@ import { jumpToSourcePosition, sourceOutline } from './lib/sourceOutline'
 type SaveOutcome = 'saved' | 'canceled' | 'failed' | 'stale'
 
 const replaceAll = (markdown: string) => replaceAllRaw(normalizeDisplayMath(markdown))
+
+// String length is available without encoding or scanning the input buffer.
+const LARGE_SOURCE_LENGTH = 64 * 1024
 
 const isInFolder = (path: string, folder: string): boolean => {
   const separator = window.api.platform === 'win32' ? '\\' : '/'
@@ -94,6 +97,7 @@ export default function App(): React.JSX.Element {
   const [folders, setFolders] = useState<FolderState[]>([])
   const [openFiles, setOpenFiles] = useState<string[]>([])
   const [markdown, setMarkdown] = useState<string>('')
+  const [analysisMarkdown, setAnalysisMarkdown] = useState('')
   const [dirty, setDirty] = useState(false)
   const [sourceMode, setSourceMode] = useState(false)
   const [renderHtml, setRenderHtml] = useState(DEFAULT_RENDER_HTML)
@@ -137,6 +141,8 @@ export default function App(): React.JSX.Element {
   const outlineSidebar = useResizableWidth('inkmark.outlineWidth')
 
   const editorRef = useRef<Editor | null>(null)
+  const findDocumentListener = useRef<(() => void) | null>(null)
+  const compositionStart = useRef<ProseMirrorNode | string | null>(null)
   const editorScrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const readingPositions = useRef({ visual: new Map<string, number>(), source: new Map<string, number>() })
@@ -176,21 +182,43 @@ export default function App(): React.JSX.Element {
   const externalPromptRef = useRef(false)
   const ignoredExternalVersionRef = useRef<string | null>(null)
   const recoveryErrorShownRef = useRef(false)
+  const recoveryTimerRef = useRef<number | null>(null)
+  const analysisTimer = useRef<number | undefined>(undefined)
 
-  const stats = useMemo(() => computeStats(markdown), [markdown])
-  const sourceText = useMemo(() => normalizeTextareaLineEndings(markdown), [markdown])
-  const activeOutline = useMemo(() => {
-    if (!sourceMode || !showOutline) return outline
-    return sourceParser ? sourceOutline(sourceParser, sourceText) : []
-  }, [outline, showOutline, sourceMode, sourceParser, sourceText])
+  const stats = useMemo(() => computeStats(analysisMarkdown), [analysisMarkdown])
+  const sourceMarkdown = sourceMode ? markdown : null
+  const sourceText = useMemo(() => normalizeTextareaLineEndings(sourceMarkdown ?? ''), [sourceMarkdown])
+  const outlineMarkdown = sourceMode && showOutline ? analysisMarkdown : null
+  const sourceHeadings = useMemo(() => sourceParser && outlineMarkdown !== null
+    ? sourceOutline(sourceParser, normalizeTextareaLineEndings(outlineMarkdown)) : [],
+    [outlineMarkdown, sourceParser])
+  const activeOutline = sourceMode ? sourceHeadings : outline
   const title = fileNameFromPath(filePath) || t('status.untitled')
 
-  const updateMarkdown = useCallback((content: string) => {
-    markdownRef.current = content
-    setMarkdown(content)
+  const refreshAnalysis = useCallback((content: string, defer: boolean) => {
+    window.clearTimeout(analysisTimer.current)
+    if (!defer) {
+      setAnalysisMarkdown(content)
+      return
+    }
+    if (compositionStart.current !== null) return
+    analysisTimer.current = window.setTimeout(() => {
+      if (sourceModeRef.current && compositionStart.current === null && markdownRef.current === content) {
+        setAnalysisMarkdown(content)
+      }
+    }, 500)
   }, [])
 
+  useEffect(() => () => window.clearTimeout(analysisTimer.current), [])
+
+  const updateMarkdown = useCallback((content: string, deferAnalysis = false) => {
+    markdownRef.current = content
+    setMarkdown(content)
+    refreshAnalysis(content, deferAnalysis)
+  }, [refreshAnalysis])
+
   const syncVisualEditor = useCallback((content: string) => {
+    compositionStart.current = null
     const editor = editorRef.current
     if (!editor) {
       pendingContentRef.current = content
@@ -209,10 +237,17 @@ export default function App(): React.JSX.Element {
     pendingContentRef.current = null
   }, [])
 
+  const cancelRecoveryTimer = useCallback(() => {
+    if (recoveryTimerRef.current === null) return
+    window.clearTimeout(recoveryTimerRef.current)
+    recoveryTimerRef.current = null
+  }, [])
+
   const setDocumentContent = useCallback((content: string) => {
+    cancelRecoveryTimer()
     updateMarkdown(content)
     syncVisualEditor(content)
-  }, [syncVisualEditor, updateMarkdown])
+  }, [cancelRecoveryTimer, syncVisualEditor, updateMarkdown])
 
   const rememberReadingPosition = useCallback(() => {
     const path = filePathRef.current
@@ -370,10 +405,12 @@ export default function App(): React.JSX.Element {
 
   const changeSourceMode = useCallback((value: boolean) => {
     rememberReadingPosition()
+    compositionStart.current = null
+    refreshAnalysis(markdownRef.current, false)
     sourceModeRef.current = value
     flushSync(() => setSourceMode(value))
     restoreReadingPosition()
-  }, [rememberReadingPosition, restoreReadingPosition])
+  }, [refreshAnalysis, rememberReadingPosition, restoreReadingPosition])
 
   const setReadOnlyMode = useCallback(
     (value: boolean) => {
@@ -411,10 +448,10 @@ export default function App(): React.JSX.Element {
     )
   }, [filePath, updateDocumentBase])
 
-  const getActiveContent = useCallback((): string => {
+  const getActiveContent = useCallback((visualDoc?: ProseMirrorNode): string => {
     if (sourceModeRef.current) return markdownRef.current
     return editorRef.current?.action((ctx) => {
-      const doc = ctx.get(editorViewCtx).state.doc
+      const doc = visualDoc ?? ctx.get(editorViewCtx).state.doc
       const snapshot = visualSourceRef.current
       if (doc === snapshot.doc) return snapshot.content
 
@@ -440,8 +477,8 @@ export default function App(): React.JSX.Element {
     return getActiveContent() !== cleanContentRef.current
   }, [getActiveContent])
 
-  const updateEditedContent = useCallback((content: string) => {
-    updateMarkdown(content)
+  const updateEditedContent = useCallback((content: string, deferAnalysis = false) => {
+    updateMarkdown(content, deferAnalysis)
     setDirty(content !== cleanContentRef.current)
   }, [updateMarkdown])
 
@@ -453,7 +490,9 @@ export default function App(): React.JSX.Element {
       value,
       (candidate) => normalizeTextareaLineEndings(candidate) === value
     )
-    updateEditedContent(content)
+    const beforeComposition = compositionStart.current
+    updateEditedContent(content, content.length >= LARGE_SOURCE_LENGTH ||
+      (typeof beforeComposition === 'string' && beforeComposition.length >= LARGE_SOURCE_LENGTH))
   }, [updateEditedContent])
 
   const clearRecoveryDraft = useCallback(async (): Promise<void> => {
@@ -488,17 +527,23 @@ export default function App(): React.JSX.Element {
   )
 
   const persistRecoveryDraft = useCallback(async (): Promise<void> => {
-    if (!hasUnsavedChanges()) {
-      await clearRecoveryDraft()
-      return
-    }
+    const source = sourceModeRef.current
+
     try {
+      const checkpoint = compositionStart.current
+      const content = typeof checkpoint === 'string' ? checkpoint : getActiveContent(checkpoint ?? undefined)
+      // The live editor may already contain the next, uncommitted candidate.
+      if (!source && checkpoint === null) updateEditedContent(content)
+      if (content === cleanContentRef.current) {
+        await clearRecoveryDraft()
+        return
+      }
       await window.api.saveRecoveryDraft({
         filePath: filePathRef.current,
-        content: getActiveContent(),
+        content,
         cleanContent: cleanContentRef.current,
         fileVersion: fileVersionRef.current,
-        sourceMode: sourceModeRef.current,
+        sourceMode: source,
         updatedAt: Date.now()
       })
       recoveryErrorShownRef.current = false
@@ -509,16 +554,23 @@ export default function App(): React.JSX.Element {
         void window.api.showError(t('error.recoveryFailed'), String(error))
       }
     }
-  }, [clearRecoveryDraft, getActiveContent, hasUnsavedChanges, t])
+  }, [clearRecoveryDraft, getActiveContent, t, updateEditedContent])
 
-  // Save shortly after editing stops, plus a five-second maximum wait so a
-  // continuously typed document still receives fresh crash-recovery points.
+  const scheduleRecoveryDraft = useCallback(() => {
+    cancelRecoveryTimer()
+    recoveryTimerRef.current = window.setTimeout(() => {
+      recoveryTimerRef.current = null
+      void persistRecoveryDraft()
+    }, 500)
+  }, [cancelRecoveryTimer, persistRecoveryDraft])
+
   useEffect(() => {
     if (!recoveryReady) return
-    const timer = window.setTimeout(() => void persistRecoveryDraft(), 500)
-    return () => window.clearTimeout(timer)
-  }, [dirty, filePath, markdown, sourceMode, recoveryReady, persistRecoveryDraft])
+    scheduleRecoveryDraft()
+    return cancelRecoveryTimer
+  }, [cancelRecoveryTimer, filePath, recoveryReady, scheduleRecoveryDraft, sourceMarkdown])
 
+  // Even during a long composition, persist the last committed revision.
   useEffect(() => {
     if (!recoveryReady) return
     const timer = window.setInterval(() => void persistRecoveryDraft(), 5_000)
@@ -532,9 +584,12 @@ export default function App(): React.JSX.Element {
     syncVisualEditor(pendingContentRef.current ?? markdownRef.current)
   }, [syncVisualEditor])
 
-  const handleChange = useCallback(() => {
-    if (!sourceModeRef.current) updateEditedContent(getActiveContent())
-  }, [getActiveContent, updateEditedContent])
+  const handleChange = useCallback((doc: ProseMirrorNode) => {
+    findDocumentListener.current?.()
+    if (sourceModeRef.current || doc === visualSourceRef.current.doc) return
+    setDirty(true)
+    scheduleRecoveryDraft()
+  }, [scheduleRecoveryDraft])
 
   const handleOutline = useCallback((items: OutlineItem[]) => {
     setOutline(items)
@@ -640,7 +695,12 @@ export default function App(): React.JSX.Element {
         // exact content that was persisted.
         const stillCurrent = getActiveContent() === content
         setDirty(!stillCurrent)
-        if (stillCurrent) await clearRecoveryDraft()
+        if (stillCurrent) {
+          if (compositionStart.current !== null) {
+            compositionStart.current = sourceModeRef.current ? content : getEditorDocument(editorRef.current)
+          }
+          await clearRecoveryDraft()
+        }
         ignoredExternalVersionRef.current = null
         return stillCurrent ? 'saved' : 'stale'
       } catch (error) {
@@ -685,6 +745,7 @@ export default function App(): React.JSX.Element {
       const choice = await window.api.confirmSave(name)
       if (choice === 'cancel') return false
       if (choice === 'discard') {
+        cancelRecoveryTimer()
         await clearRecoveryDraft()
         return true
       }
@@ -695,7 +756,7 @@ export default function App(): React.JSX.Element {
     }
     await clearRecoveryDraft()
     return true
-  }, [clearRecoveryDraft, hasUnsavedChanges, save, t])
+  }, [cancelRecoveryTimer, clearRecoveryDraft, hasUnsavedChanges, save, t])
 
   const rememberOpenedFile = useCallback((path: string) => {
     void window.api.recordRecentFile(path).catch(console.error)
@@ -865,14 +926,15 @@ export default function App(): React.JSX.Element {
 
         const textarea = textareaRef.current
         const editor = editorRef.current
+        const doc = getEditorDocument(editor)
         const matches = textarea
           ? await findInStringAsync(textarea.value, query, flags)
-          : editor ? await findTextMatchesAsync(editor, query, flags) : []
+          : doc ? await findTextMatchesAsync(doc, query, flags) : []
         const match = matches[matchIndex] ?? matches[matches.length - 1]
         if (!match || documentLoadRef.current !== load || filePathRef.current !== result.path ||
           textareaRef.current !== textarea || markdownRef.current !== result.content) return
         if (textarea) jumpToSourcePosition(textarea, match.from, match.to)
-        else if (editor) selectMatch(editor, match)
+        else if (editor && getEditorDocument(editorRef.current) === doc) selectMatch(editor, match)
       } catch (error) {
         console.error('Failed to open search result', error)
         await reportSaveError(t('error.openFailed'), error)
@@ -1053,7 +1115,7 @@ export default function App(): React.JSX.Element {
   const navigateOutline = useCallback((pos: number) => {
     if (sourceModeRef.current) {
       const textarea = textareaRef.current
-      if (textarea) jumpToSourcePosition(textarea, pos)
+      if (textarea && analysisMarkdown === markdownRef.current) jumpToSourcePosition(textarea, pos)
       return
     }
     editorRef.current?.action((ctx) => {
@@ -1067,7 +1129,7 @@ export default function App(): React.JSX.Element {
         heading.scrollIntoView({ behavior: 'instant', block: 'start' })
       }
     })
-  }, [])
+  }, [analysisMarkdown])
 
   const toggleSourceMode = useCallback(() => {
     const next = !sourceModeRef.current
@@ -1405,7 +1467,10 @@ export default function App(): React.JSX.Element {
     [sourceMode, readOnly]
   )
 
-  const getEditor = useCallback(() => editorRef.current, [])
+  const subscribeToDocument = useCallback((listener: () => void) => {
+    findDocumentListener.current = listener
+    return () => { findDocumentListener.current = null }
+  }, [])
 
   // Smart hyperlink handling: http/https → external browser; local links are
   // resolved relative to the document and opened in the app (markdown) or with
@@ -1541,7 +1606,8 @@ export default function App(): React.JSX.Element {
         )}
         {findOpen && (
           <FindBar
-            getEditor={getEditor}
+            editor={editorRef.current}
+            subscribeToDocument={subscribeToDocument}
             sourceMode={sourceMode}
             sourceText={sourceText}
             textareaRef={textareaRef}
@@ -1561,6 +1627,17 @@ export default function App(): React.JSX.Element {
           onClick={onEditorClick}
           onContextMenu={onEditorContextMenu}
           onScroll={() => setCtxMenu(null)}
+          onCompositionStart={() => {
+            compositionStart.current = sourceModeRef.current ? markdownRef.current : getEditorDocument(editorRef.current)
+          }}
+          onCompositionEnd={() => {
+            compositionStart.current = null
+            if (sourceModeRef.current) {
+              const content = markdownRef.current
+              refreshAnalysis(content, content.length >= LARGE_SOURCE_LENGTH)
+            }
+            scheduleRecoveryDraft()
+          }}
         >
           {localeReady && recoveryReady && (
             <div className={`wysiwyg-wrap${sourceMode ? ' hidden' : ''}`}>
@@ -1599,6 +1676,7 @@ export default function App(): React.JSX.Element {
       {showOutline && (
         <OutlinePanel
           outline={activeOutline}
+          pending={sourceMode && analysisMarkdown !== markdown}
           onNavigate={navigateOutline}
           width={outlineSidebar.width}
           onResizeStart={outlineSidebar.startResize}

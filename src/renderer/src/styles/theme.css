@@ -1221,9 +1221,12 @@ body.resizing {
   white-space: nowrap;
   transition: background 0.13s ease, color 0.13s ease;
 }
-.outline-item:hover {
+.outline-item:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text);
+}
+.outline-item:disabled {
+  cursor: default;
 }
 
 .outline-bullet {

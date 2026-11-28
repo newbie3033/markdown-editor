@@ -1316,6 +1316,11 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       const count = document.querySelector('.find-count')?.textContent?.trim()
       const one = document.querySelector('.findbar-replace .replace-btn')
       if (!one) return { ok: false }
+      const editor = document.querySelector('.ProseMirror')
+      editor.focus()
+      getSelection().collapse(editor.querySelector('p').firstChild, 0)
+      document.execCommand('insertText', false, 'prefix ')
+      await new Promise(r => setTimeout(r, 150))
       one.click()
       await new Promise(r => setTimeout(r, 700))
       const afterOne = window.__inkmarkGetMarkdown()
@@ -1330,8 +1335,8 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
       JSON.stringify({ ok: replaceUi?.ok, count: replaceUi?.count })
     )
     check(
-      'replace one occurrence',
-      (replaceUi?.afterOne ?? '').includes('WORLD world') &&
+      'replace one occurrence at its new position after a visual edit',
+      (replaceUi?.afterOne ?? '').includes('prefix WORLD world') &&
         (replaceUi?.afterOne ?? '').includes('HELLO again'),
       JSON.stringify(replaceUi?.afterOne)
     )
@@ -2777,8 +2782,42 @@ export async function runSelfTest(win: BrowserWindow): Promise<void> {
     await sleep(400)
     win.webContents.send(IPC.menuAction, 'save')
     await sleep(450)
+    const expectedSourceEdit = expectedInlineEdits.replaceAll('\r\n- ', '\r\n+ ')
     check('source formatting edits survive a switch to visual mode and saving',
-      await fs.readFile(formattedPath, 'utf8') === expectedInlineEdits.replaceAll('\r\n- ', '\r\n+ '))
+      await fs.readFile(formattedPath, 'utf8') === expectedSourceEdit)
+
+    await js(`(() => {
+      const editor = document.querySelector('.ProseMirror')
+      const heading = editor.querySelector('h1')
+      editor.focus()
+      getSelection().collapse(heading.firstChild, heading.textContent.length)
+    })()`)
+    debuggerSession.attach()
+    try {
+      await debuggerSession.sendCommand('Input.imeSetComposition', {
+        text: 'han', selectionStart: 3, selectionEnd: 3
+      })
+      await sleep(650)
+      check('active IME composition stays out of the recovery draft',
+        await js(`document.querySelector('.ProseMirror h1')?.textContent === 'Original edithan'`) === true &&
+        await js(`window.api.loadRecoveryDraft()`) === null)
+      await debuggerSession.sendCommand('Input.insertText', { text: '汉' })
+      await debuggerSession.sendCommand('Input.imeSetComposition', {
+        text: 'zi', selectionStart: 2, selectionEnd: 2
+      })
+      await sleep(650)
+      const lastCommit = await js('window.api.loadRecoveryDraft()') as { content: string } | null
+      check('recovery keeps the preceding commit during the next composition',
+        lastCommit?.content === expectedSourceEdit.replace('Original edit', 'Original edit汉') &&
+        await js(`document.querySelector('.ProseMirror h1')?.textContent`) === 'Original edit汉zi')
+      await debuggerSession.sendCommand('Input.insertText', { text: '字' })
+    } finally {
+      debuggerSession.detach()
+    }
+    await sleep(750)
+    const imeDraft = await js(`window.api.loadRecoveryDraft()`) as { content: string } | null
+    check('committed IME text and original formatting reach the recovery draft',
+      imeDraft?.content === expectedSourceEdit.replace('Original edit', 'Original edit汉字'))
     win.webContents.send(IPC.openPath, join(TEST_DIR, 'docs', 'saved-in-folder.md'))
     await sleep(450)
 

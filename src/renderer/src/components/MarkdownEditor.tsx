@@ -8,6 +8,7 @@ import {
   editorViewOptionsCtx,
   remarkStringifyOptionsCtx
 } from '@milkdown/kit/core'
+import type { Node as ProseMirrorNode } from '@milkdown/prose/model'
 import { Plugin } from '@milkdown/prose/state'
 import { TableView, tableEditing } from '@milkdown/prose/tables'
 import { $prose } from '@milkdown/kit/utils'
@@ -87,7 +88,7 @@ interface EditorProps {
   initialMarkdown: string
   renderHtml: boolean
   onReady: (editor: Editor) => void
-  onChange: () => void
+  onChange: (doc: ProseMirrorNode) => void
   onOutline: (items: OutlineItem[]) => void
   /** Saves an untitled document before creating a relative image asset. */
   ensureDocPath: () => Promise<string | null>
@@ -235,13 +236,13 @@ function InnerEditor({
             let destroyed = false
             return {
               update(view, previous) {
-                if (queued || view.state.doc.eq(previous.doc)) return
+                if (queued || view.state.doc === previous.doc) return
                 queued = true
                 // Read the committed document after synchronous replacements
                 // have updated their source snapshot, without waiting on timers.
                 queueMicrotask(() => {
                   queued = false
-                  if (!destroyed) onChangeRef.current()
+                  if (!destroyed) onChangeRef.current(view.state.doc)
                 })
               },
               destroy() {

@@ -1,12 +1,14 @@
+import { memo } from 'react'
 import type { OutlineItem } from '../lib/markdown'
 import { useI18n } from '../lib/i18n'
 
 interface OutlineProps {
   items: OutlineItem[]
+  disabled: boolean
   onNavigate: (pos: number) => void
 }
 
-export function Outline({ items, onNavigate }: OutlineProps): React.JSX.Element {
+export const Outline = memo(function Outline({ items, disabled, onNavigate }: OutlineProps): React.JSX.Element {
   const { t } = useI18n()
   if (items.length === 0) {
     return <div className="tree-empty">{t('outline.empty')}</div>
@@ -17,6 +19,7 @@ export function Outline({ items, onNavigate }: OutlineProps): React.JSX.Element 
         <button
           key={item.pos}
           className="outline-item"
+          disabled={disabled}
           style={{ paddingLeft: 8 + (item.level - 1) * 14 }}
           onClick={() => onNavigate(item.pos)}
           title={item.text}
@@ -27,4 +30,4 @@ export function Outline({ items, onNavigate }: OutlineProps): React.JSX.Element 
       ))}
     </div>
   )
-}
+})
